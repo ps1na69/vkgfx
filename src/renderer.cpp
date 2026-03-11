@@ -1,13 +1,25 @@
+// renderer.cpp — Deferred shading pipeline implementation.
+//
+// Pass order per frame:
+//   1. Geometry   → fills G-buffer (position, normal, albedo, material, emissive + depth)
+//   2. SSAO       → hemisphere AO in view-space   → R8 image
+//   3. SSAO Blur  → depth-aware 4×4 box filter    → R8 image
+//   4. Lighting   → Cook-Torrance PBR, all lights → RGBA16F HDR image
+//   5. Tonemap    → ACES/Reinhard/Hable + gamma   → swapchain image
+
 #include "vkgfx/renderer.h"
 #include <chrono>
 #include <algorithm>
-#include <thread>
 #include <future>
-#include <unordered_set>
+#include <mutex>
+#include <random>
+#include <cstring>
 
 namespace vkgfx {
 
-// ─── Constructor ──────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Constructor
+// ─────────────────────────────────────────────────────────────────────────────
 Renderer::Renderer(Window& window, const RendererSettings& settings)
     : m_window(window), m_settings(settings)
 {
@@ -15,1644 +27,1294 @@ Renderer::Renderer(Window& window, const RendererSettings& settings)
     ci.appName          = window.settings().title;
     ci.enableValidation = settings.validation;
     ci.preferDedicated  = true;
-
-    m_ctx = std::make_shared<Context>(ci);
+    m_ctx    = std::make_shared<Context>(ci);
     m_surface = window.createSurface(m_ctx->instance());
     m_ctx->initDevice(m_surface);
 
     auto [w, h] = window.getFramebufferSize();
-    VkSampleCountFlagBits samples    = static_cast<VkSampleCountFlagBits>(settings.msaa);
-    VkSampleCountFlagBits maxSamples = m_ctx->maxSampleCount();
-    while (samples > maxSamples) samples = static_cast<VkSampleCountFlagBits>(samples >> 1);
-
     m_swapchain = std::make_unique<Swapchain>(*m_ctx, m_surface, w, h,
-                                               settings.vsync, samples);
-
-    createDescriptorPool();
-    createGlobalDescriptorSetLayout();
-    createGlobalDescriptorSets();
+                                               settings.vsync, VK_SAMPLE_COUNT_1_BIT);
 
     VkPipelineCacheCreateInfo pcCI{};
     pcCI.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-    vkCreatePipelineCache(m_ctx->device(), &pcCI, nullptr, &m_pipelineCache_vk);
+    vkCreatePipelineCache(m_ctx->device(), &pcCI, nullptr, &m_pipelineCache);
 
-    m_whiteTexture = Texture::fromColor(m_ctx, {1,1,1,1});
-    m_sceneRenderPass = m_swapchain->renderPass();
+    m_whiteTexture      = Texture::fromColor(m_ctx, {1.f,1.f,1.f,1.f});
+    m_flatNormalTexture = Texture::fromColor(m_ctx, {0.5f,0.5f,1.f,1.f});
 
-    createShadowResources();
+    createDescriptorPool();
+    createDescriptorLayouts();
 
-    // ── Thread pool + per-worker secondary command pools ──────────────────────
-    uint32_t workerCount = settings.workerThreads == 0
-                           ? std::max(1u, std::thread::hardware_concurrency() - 1u)
-                           : settings.workerThreads;
-    m_threadPool = std::make_unique<ThreadPool>(workerCount);
-    createWorkerCommandPools(workerCount);
-    m_stats.workerThreads = workerCount;
+    // Render passes must exist before we create pipelines and size-dep resources.
+    createGeometryRenderPass();
+    createSSAORenderPass();
+    createSSAOBlurRenderPass();
+    createLightingRenderPass();
 
-    std::cout << "[VKGFX] Renderer initialised ("
-              << w << "x" << h << ", MSAA x"
-              << static_cast<uint32_t>(samples) << ", "
-              << workerCount << " worker threads)\n";
+    createPerFrameBuffers();
+    createSSAOKernel();
+    createSizeDependentResources();
+    allocateAndWriteDescriptorSets();
+
+    createGeometryPipeline();
+    createSSAOPipeline();
+    createSSAOBlurPipeline();
+    createLightingPipeline();
+    createTonemapPipeline();
+
+    // ── New systems ─────────────────────────────────────────────────────────
+    initRenderGraph();
+    initShadows();
+    initGPUCulling();
+    initIBL();  // tries assets/sky.hdr; no-ops gracefully if missing
+
+    uint32_t wc = settings.workerThreads == 0
+                ? std::max(1u, std::thread::hardware_concurrency() - 1u)
+                : settings.workerThreads;
+    m_threadPool = std::make_unique<ThreadPool>(wc);
+    createWorkerPools(wc);
+
+    std::cout << "[VKGFX] Deferred renderer ready ("
+              << w << "x" << h << ", " << wc << " workers)\n";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Destructor / Shutdown
+// ─────────────────────────────────────────────────────────────────────────────
 Renderer::~Renderer() { shutdown(); }
 
-// ─── shutdown ─────────────────────────────────────────────────────────────────
 void Renderer::shutdown(Scene* scene) {
     if (!m_ctx) return;
     m_ctx->waitIdle();
 
-    for (auto& entry : m_deletionQueue) {
-        m_ctx->destroyBuffer(entry.vertexBuffer);
-        m_ctx->destroyBuffer(entry.indexBuffer);
-        for (auto& buf : entry.matBuffers) m_ctx->destroyBuffer(buf);
+    for (auto& d : m_deletionQueue) {
+        m_ctx->destroyBuffer(d.vertexBuffer);
+        m_ctx->destroyBuffer(d.indexBuffer);
+        for (auto& b : d.matUBOs) m_ctx->destroyBuffer(b);
     }
     m_deletionQueue.clear();
 
     m_threadPool.reset();
-    destroyWorkerCommandPools();
+    destroyWorkerPools();
 
-    destroyShadowResources();
-    shutdownPostProcess();
-
-    for (auto& [meshPtr, data] : m_meshData) {
-        m_ctx->destroyBuffer(data.vertexBuffer);
-        m_ctx->destroyBuffer(data.indexBuffer);
-        for (auto& buf : data.matBuffers) m_ctx->destroyBuffer(buf);
-        if (scene) {
-            for (auto& m : scene->meshes()) {
-                if (m.get() == meshPtr) {
-                    m->vertexBuffer = {};
-                    m->indexBuffer  = {};
-                    m->gpuReady     = false;
-                    break;
-                }
-            }
+    for (auto& [ptr, data] : m_meshData) {
+        // Destroy the GPU-side vertex/index buffers uploaded by uploadMeshToGPU().
+        // These live on the Mesh object itself; the Mesh destructor cannot free them
+        // because it has no Context reference, so the renderer must do it here.
+        if (ptr) {
+            m_ctx->destroyBuffer(ptr->vertexBuffer);
+            m_ctx->destroyBuffer(ptr->indexBuffer);
         }
+        for (auto& b : data.matUBOs) m_ctx->destroyBuffer(b);
     }
     m_meshData.clear();
 
+    destroySizeDependentResources();
+
+    auto dev = m_ctx->device();
+    auto killPL = [&](VkPipeline& p, VkPipelineLayout& l) {
+        if (p) { vkDestroyPipeline(dev, p, nullptr);       p = VK_NULL_HANDLE; }
+        if (l) { vkDestroyPipelineLayout(dev, l, nullptr); l = VK_NULL_HANDLE; }
+    };
+    killPL(m_geomPipeline,     m_geomPipeLayout);
+    killPL(m_ssaoPipeline,     m_ssaoPipeLayout);
+    killPL(m_ssaoBlurPipeline, m_ssaoBlurPipeLayout);
+    killPL(m_lightPipeline,    m_lightPipeLayout);
+    killPL(m_tonemapPipeline,  m_tonemapPipeLayout);
+
+    for (VkRenderPass* rp : {&m_geomRP,&m_ssaoRP,&m_ssaoBlurRP,&m_lightingRP})
+        if (*rp) { vkDestroyRenderPass(dev, *rp, nullptr); *rp = VK_NULL_HANDLE; }
+
+    for (VkDescriptorSetLayout* l : {&m_frameLayout,&m_matLayout,&m_gbufLayout,
+                                      &m_ssaoLayout,&m_ssaoBlurLayout,&m_lightLayout,&m_hdrLayout})
+        if (*l) { vkDestroyDescriptorSetLayout(dev, *l, nullptr); *l = VK_NULL_HANDLE; }
+
+    for (auto& f : m_frames) {
+        m_ctx->destroyBuffer(f.frameUBO);
+        m_ctx->destroyBuffer(f.lightSSBO);
+        m_ctx->destroyBuffer(f.ssaoUBO);
+    }
+
+    m_ctx->destroyImage(m_ssaoNoise);
+    if (m_ssaoNoiseSampler) { vkDestroySampler(dev, m_ssaoNoiseSampler, nullptr); m_ssaoNoiseSampler=VK_NULL_HANDLE; }
+
+    // ── New systems cleanup ──────────────────────────────────────────────────
+    m_gpuCulling.reset();
+    m_shadowSystem.reset();
+    m_iblProbe.reset();
+    m_renderGraph.reset();
+
+    for (auto& fx : m_framesExt)
+        m_ctx->destroyBuffer(fx.shadowUBO);
+
+    for (VkDescriptorSetLayout* l : {&m_iblLayout, &m_shadowLayout})
+        if (*l) { vkDestroyDescriptorSetLayout(dev, *l, nullptr); *l = VK_NULL_HANDLE; }
+
     m_whiteTexture.reset();
+    m_flatNormalTexture.reset();
 
-    destroyPipelines();
-
-    for (auto& ubo : m_cameraUBOs) m_ctx->destroyBuffer(ubo);
-    for (auto& ubo : m_sceneUBOs)  m_ctx->destroyBuffer(ubo);
-
-    if (m_globalSetLayout) vkDestroyDescriptorSetLayout(m_ctx->device(), m_globalSetLayout, nullptr);
-    if (m_descriptorPool)  vkDestroyDescriptorPool(m_ctx->device(), m_descriptorPool, nullptr);
-    if (m_pipelineCache_vk) vkDestroyPipelineCache(m_ctx->device(), m_pipelineCache_vk, nullptr);
+    if (m_descPool)      { vkDestroyDescriptorPool(dev, m_descPool,     nullptr); m_descPool=VK_NULL_HANDLE; }
+    if (m_pipelineCache) { vkDestroyPipelineCache (dev, m_pipelineCache, nullptr); m_pipelineCache=VK_NULL_HANDLE; }
 
     m_swapchain.reset();
-    if (m_surface) { vkDestroySurfaceKHR(m_ctx->instance(), m_surface, nullptr); m_surface = VK_NULL_HANDLE; }
+    if (m_surface) { vkDestroySurfaceKHR(m_ctx->instance(), m_surface, nullptr); m_surface=VK_NULL_HANDLE; }
     m_ctx.reset();
 }
 
-// ─── setPostProcess ───────────────────────────────────────────────────────────
-void Renderer::setPostProcess(const PostProcessSettings& pp) {
-    bool wasActive = m_ppActive;
-    m_ppSettings   = pp;
-
-    if (pp.enabled && !wasActive) {
-        m_ctx->waitIdle();
-        destroyPipelines();
-        m_ppActive = true;
-        initPostProcess();
-    } else if (!pp.enabled && wasActive) {
-        m_ctx->waitIdle();
-        shutdownPostProcess();
-        m_sceneRenderPass = m_swapchain->renderPass();
-        destroyPipelines();
-    }
-}
-
-// ─── Post-process init / shutdown ─────────────────────────────────────────────
-void Renderer::initPostProcess() {
-    createOffscreenResources();
-    createPPRenderPass();
-    createPPFramebuffers();
-    createPPDescriptorLayoutAndSets();
-    createPPPipeline();
-    m_ppDescWrittenFrames = 0;   // force image descriptor write on first frame
-}
-
-void Renderer::shutdownPostProcess() {
-    destroyPPPipeline();
-    destroyPPDescriptorResources();
-    destroyPPFramebuffers();
-    destroyPPRenderPass();
-    destroyOffscreenResources();
-    m_ppActive = false;
-    m_ppDescWrittenFrames = 0;
-}
-
-// ─── Offscreen HDR resources ──────────────────────────────────────────────────
-void Renderer::createOffscreenResources() {
-    VkExtent2D ext = m_swapchain->extent();
-
-    m_offscreenColor = m_ctx->createImage(
-        ext.width, ext.height, 1, VK_SAMPLE_COUNT_1_BIT,
-        VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    m_offscreenColor.mipLevels = 1;
-    m_ctx->createImageView(m_offscreenColor, VK_IMAGE_ASPECT_COLOR_BIT);
-
-    VkFormat depthFmt = m_ctx->findDepthFormat();
-    m_offscreenDepth = m_ctx->createImage(
-        ext.width, ext.height, 1, VK_SAMPLE_COUNT_1_BIT,
-        depthFmt, VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    m_offscreenDepth.mipLevels = 1;
-    m_ctx->createImageView(m_offscreenDepth, VK_IMAGE_ASPECT_DEPTH_BIT);
-
-    VkSamplerCreateInfo si{};
-    si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    si.magFilter    = VK_FILTER_LINEAR;
-    si.minFilter    = VK_FILTER_LINEAR;
-    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    si.maxLod       = 0.f;
-    VK_CHECK(vkCreateSampler(m_ctx->device(), &si, nullptr, &m_offscreenSampler), "Offscreen sampler");
-
-    VkAttachmentDescription colorAtt{};
-    colorAtt.format         = VK_FORMAT_R16G16B16A16_SFLOAT;
-    colorAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
-    colorAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAtt.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAtt.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAtt.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentDescription depthAtt{};
-    depthAtt.format         = depthFmt;
-    depthAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
-    depthAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAtt.storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    depthAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAtt.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAtt.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference colorRef{ 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-    VkAttachmentReference depthRef{ 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-
-    VkSubpassDescription sub{};
-    sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    sub.colorAttachmentCount    = 1;
-    sub.pColorAttachments       = &colorRef;
-    sub.pDepthStencilAttachment = &depthRef;
-
-    std::array<VkSubpassDependency, 2> deps{};
-    deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
-    deps[0].dstSubpass    = 0;
-    deps[0].srcStageMask  = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    deps[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-    deps[1].srcSubpass    = 0;
-    deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
-    deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-    std::array<VkAttachmentDescription, 2> attachments{ colorAtt, depthAtt };
-    VkRenderPassCreateInfo rpCI{};
-    rpCI.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpCI.attachmentCount = static_cast<uint32_t>(attachments.size());
-    rpCI.pAttachments    = attachments.data();
-    rpCI.subpassCount    = 1;
-    rpCI.pSubpasses      = &sub;
-    rpCI.dependencyCount = static_cast<uint32_t>(deps.size());
-    rpCI.pDependencies   = deps.data();
-    VK_CHECK(vkCreateRenderPass(m_ctx->device(), &rpCI, nullptr, &m_offscreenRenderPass),
-             "Offscreen render pass");
-
-    std::array<VkImageView, 2> fbViews{ m_offscreenColor.view, m_offscreenDepth.view };
-    VkFramebufferCreateInfo fbCI{};
-    fbCI.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    fbCI.renderPass      = m_offscreenRenderPass;
-    fbCI.attachmentCount = static_cast<uint32_t>(fbViews.size());
-    fbCI.pAttachments    = fbViews.data();
-    fbCI.width           = ext.width;
-    fbCI.height          = ext.height;
-    fbCI.layers          = 1;
-    VK_CHECK(vkCreateFramebuffer(m_ctx->device(), &fbCI, nullptr, &m_offscreenFramebuffer),
-             "Offscreen framebuffer");
-
-    m_sceneRenderPass = m_offscreenRenderPass;
-}
-
-void Renderer::destroyOffscreenResources() {
-    if (m_offscreenFramebuffer) {
-        vkDestroyFramebuffer(m_ctx->device(), m_offscreenFramebuffer, nullptr);
-        m_offscreenFramebuffer = VK_NULL_HANDLE;
-    }
-    if (m_offscreenRenderPass) {
-        vkDestroyRenderPass(m_ctx->device(), m_offscreenRenderPass, nullptr);
-        m_offscreenRenderPass = VK_NULL_HANDLE;
-    }
-    if (m_offscreenSampler) {
-        vkDestroySampler(m_ctx->device(), m_offscreenSampler, nullptr);
-        m_offscreenSampler = VK_NULL_HANDLE;
-    }
-    m_ctx->destroyImage(m_offscreenColor);
-    m_ctx->destroyImage(m_offscreenDepth);
-}
-
-// ─── PP render pass ───────────────────────────────────────────────────────────
-void Renderer::createPPRenderPass() {
-    VkAttachmentDescription colorAtt{};
-    colorAtt.format         = m_swapchain->format();
-    colorAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
-    colorAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAtt.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAtt.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAtt.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    VkAttachmentReference colorRef{ 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-
-    VkSubpassDescription sub{};
-    sub.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    sub.colorAttachmentCount = 1;
-    sub.pColorAttachments    = &colorRef;
-
-    VkSubpassDependency dep{};
-    dep.srcSubpass    = VK_SUBPASS_EXTERNAL;
-    dep.dstSubpass    = 0;
-    dep.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep.srcAccessMask = 0;
-    dep.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-    VkRenderPassCreateInfo rpCI{};
-    rpCI.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpCI.attachmentCount = 1;
-    rpCI.pAttachments    = &colorAtt;
-    rpCI.subpassCount    = 1;
-    rpCI.pSubpasses      = &sub;
-    rpCI.dependencyCount = 1;
-    rpCI.pDependencies   = &dep;
-    VK_CHECK(vkCreateRenderPass(m_ctx->device(), &rpCI, nullptr, &m_ppRenderPass), "PP render pass");
-}
-
-void Renderer::destroyPPRenderPass() {
-    if (m_ppRenderPass) {
-        vkDestroyRenderPass(m_ctx->device(), m_ppRenderPass, nullptr);
-        m_ppRenderPass = VK_NULL_HANDLE;
-    }
-}
-
-// ─── PP framebuffers ──────────────────────────────────────────────────────────
-void Renderer::createPPFramebuffers() {
-    uint32_t  n   = m_swapchain->imageCount();
-    VkExtent2D ext = m_swapchain->extent();
-    m_ppFramebuffers.resize(n, VK_NULL_HANDLE);
-
-    for (uint32_t i = 0; i < n; ++i) {
-        VkImageView view = m_swapchain->imageView(i);
-        VkFramebufferCreateInfo fbCI{};
-        fbCI.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        fbCI.renderPass      = m_ppRenderPass;
-        fbCI.attachmentCount = 1;
-        fbCI.pAttachments    = &view;
-        fbCI.width           = ext.width;
-        fbCI.height          = ext.height;
-        fbCI.layers          = 1;
-        VK_CHECK(vkCreateFramebuffer(m_ctx->device(), &fbCI, nullptr, &m_ppFramebuffers[i]),
-                 "PP framebuffer");
-    }
-}
-
-void Renderer::destroyPPFramebuffers() {
-    for (auto& fb : m_ppFramebuffers)
-        if (fb) { vkDestroyFramebuffer(m_ctx->device(), fb, nullptr); fb = VK_NULL_HANDLE; }
-    m_ppFramebuffers.clear();
-}
-
-// ─── PP descriptor layout + sets ─────────────────────────────────────────────
-void Renderer::createPPDescriptorLayoutAndSets() {
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
-    bindings[0] = { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
-    bindings[1] = { 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
-
-    VkDescriptorSetLayoutCreateInfo dslCI{};
-    dslCI.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslCI.bindingCount = static_cast<uint32_t>(bindings.size());
-    dslCI.pBindings    = bindings.data();
-    VK_CHECK(vkCreateDescriptorSetLayout(m_ctx->device(), &dslCI, nullptr, &m_ppDescSetLayout),
-             "PP descriptor set layout");
-
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        m_ppUBOs[i] = m_ctx->createBuffer(sizeof(PostProcessUBO),
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    }
-
-    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
-    layouts.fill(m_ppDescSetLayout);
-    VkDescriptorSetAllocateInfo dsAI{};
-    dsAI.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    dsAI.descriptorPool     = m_descriptorPool;
-    dsAI.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
-    dsAI.pSetLayouts        = layouts.data();
-    VK_CHECK(vkAllocateDescriptorSets(m_ctx->device(), &dsAI, m_ppDescSets.data()), "PP descriptor sets");
-}
-
-void Renderer::destroyPPDescriptorResources() {
-    for (auto& ubo : m_ppUBOs) m_ctx->destroyBuffer(ubo);
-    if (m_ppDescSetLayout) {
-        vkDestroyDescriptorSetLayout(m_ctx->device(), m_ppDescSetLayout, nullptr);
-        m_ppDescSetLayout = VK_NULL_HANDLE;
-    }
-}
-
-void Renderer::updatePPDescriptors(uint32_t frameIdx) {
-    // UBO is always updated (cheap persistent-mapped memcpy — ~64 bytes)
-    auto ubo = m_ppSettings.toUBO();
-    std::memcpy(m_ppUBOs[frameIdx].mapped, &ubo, sizeof(PostProcessUBO));
-
-    // The offscreen image view never changes between frames. Only write the
-    // combined-image-sampler descriptor once per frame slot; skip it on every
-    // subsequent frame to avoid a redundant driver call.
-    const uint32_t bit = 1u << frameIdx;
-    if (m_ppDescWrittenFrames & bit) return;
-    m_ppDescWrittenFrames |= bit;
-
-    VkDescriptorImageInfo imgInfo{};
-    imgInfo.sampler     = m_offscreenSampler;
-    imgInfo.imageView   = m_offscreenColor.view;
-    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkDescriptorBufferInfo bufInfo{ m_ppUBOs[frameIdx].buffer, 0, sizeof(PostProcessUBO) };
-
-    std::array<VkWriteDescriptorSet, 2> writes{};
-    writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet          = m_ppDescSets[frameIdx];
-    writes[0].dstBinding      = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].pImageInfo      = &imgInfo;
-
-    writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet          = m_ppDescSets[frameIdx];
-    writes[1].dstBinding      = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[1].pBufferInfo     = &bufInfo;
-
-    vkUpdateDescriptorSets(m_ctx->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-}
-
-// ─── PP pipeline ─────────────────────────────────────────────────────────────
-void Renderer::createPPPipeline() {
-    VkPipelineLayoutCreateInfo layoutCI{};
-    layoutCI.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutCI.setLayoutCount = 1;
-    layoutCI.pSetLayouts    = &m_ppDescSetLayout;
-    VK_CHECK(vkCreatePipelineLayout(m_ctx->device(), &layoutCI, nullptr, &m_ppPipelineLayout),
-             "PP pipeline layout");
-
-    auto vertPath = m_settings.shaderDir / "postprocess.vert.spv";
-    auto fragPath = m_settings.shaderDir / "postprocess.frag.spv";
-    VkShaderModule vertMod = createShaderModule(vertPath);
-    VkShaderModule fragMod = createShaderModule(fragPath);
-
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;   stages[0].module = vertMod; stages[0].pName = "main";
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fragMod; stages[1].pName = "main";
-
-    VkPipelineVertexInputStateCreateInfo vi{};
-    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-
-    VkPipelineInputAssemblyStateCreateInfo ia{};
-    ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkViewport vp{0,0,1,1,0,1}; VkRect2D sc{{0,0},{1,1}};
-    VkPipelineViewportStateCreateInfo vpState{};
-    vpState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    vpState.viewportCount = 1; vpState.pViewports = &vp;
-    vpState.scissorCount  = 1; vpState.pScissors  = &sc;
-
-    VkPipelineRasterizationStateCreateInfo rast{};
-    rast.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rast.polygonMode = VK_POLYGON_MODE_FILL;
-    rast.cullMode    = VK_CULL_MODE_NONE;
-    rast.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rast.lineWidth   = 1.f;
-
-    VkPipelineMultisampleStateCreateInfo ms{};
-    ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineDepthStencilStateCreateInfo ds{};
-    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-
-    VkPipelineColorBlendAttachmentState blendAttach{};
-    blendAttach.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                 VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    VkPipelineColorBlendStateCreateInfo blend{};
-    blend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend.attachmentCount = 1;
-    blend.pAttachments    = &blendAttach;
-
-    std::array<VkDynamicState, 2> dynStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dyn{};
-    dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dyn.dynamicStateCount = static_cast<uint32_t>(dynStates.size());
-    dyn.pDynamicStates    = dynStates.data();
-
-    VkGraphicsPipelineCreateInfo pci{};
-    pci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pci.stageCount          = 2;
-    pci.pStages             = stages;
-    pci.pVertexInputState   = &vi;
-    pci.pInputAssemblyState = &ia;
-    pci.pViewportState      = &vpState;
-    pci.pRasterizationState = &rast;
-    pci.pMultisampleState   = &ms;
-    pci.pDepthStencilState  = &ds;
-    pci.pColorBlendState    = &blend;
-    pci.pDynamicState       = &dyn;
-    pci.layout              = m_ppPipelineLayout;
-    pci.renderPass          = m_ppRenderPass;
-    pci.subpass             = 0;
-
-    VK_CHECK(vkCreateGraphicsPipelines(m_ctx->device(), m_pipelineCache_vk, 1, &pci, nullptr, &m_ppPipeline),
-             "PP graphics pipeline");
-
-    vkDestroyShaderModule(m_ctx->device(), vertMod, nullptr);
-    vkDestroyShaderModule(m_ctx->device(), fragMod, nullptr);
-}
-
-void Renderer::destroyPPPipeline() {
-    if (m_ppPipeline)       { vkDestroyPipeline      (m_ctx->device(), m_ppPipeline,       nullptr); m_ppPipeline       = VK_NULL_HANDLE; }
-    if (m_ppPipelineLayout) { vkDestroyPipelineLayout(m_ctx->device(), m_ppPipelineLayout, nullptr); m_ppPipelineLayout = VK_NULL_HANDLE; }
-}
-
-// ─── PP pass recording ────────────────────────────────────────────────────────
-void Renderer::recordPPPass(VkCommandBuffer cmd, uint32_t imageIdx, uint32_t frameIdx) {
-    updatePPDescriptors(frameIdx);
-
-    VkExtent2D ext = m_swapchain->extent();
-
-    VkRenderPassBeginInfo rpBI{};
-    rpBI.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpBI.renderPass        = m_ppRenderPass;
-    rpBI.framebuffer       = m_ppFramebuffers[imageIdx];
-    rpBI.renderArea.extent = ext;
-    rpBI.clearValueCount   = 0;
-    rpBI.pClearValues      = nullptr;
-    vkCmdBeginRenderPass(cmd, &rpBI, VK_SUBPASS_CONTENTS_INLINE);
-
-    VkViewport vp{};
-    vp.width    = static_cast<float>(ext.width);
-    vp.height   = static_cast<float>(ext.height);
-    vp.minDepth = 0.f; vp.maxDepth = 1.f;
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    VkRect2D sc{ {0,0}, ext };
-    vkCmdSetScissor(cmd, 0, 1, &sc);
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ppPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                             m_ppPipelineLayout, 0, 1, &m_ppDescSets[frameIdx], 0, nullptr);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-
-    vkCmdEndRenderPass(cmd);
-}
-
-// ─── render() ─────────────────────────────────────────────────────────────────
-void Renderer::render(Scene& scene) {
-    auto t0 = std::chrono::high_resolution_clock::now();
-
-    // Detect and enqueue stale mesh entries for deferred deletion
-    {
-        std::unordered_set<Mesh*> live;
-        live.reserve(scene.meshes().size());
-        for (auto& m : scene.meshes()) live.insert(m.get());
-
-        std::vector<Mesh*> stale;
-        for (auto& [ptr, data] : m_meshData)
-            if (!live.count(ptr)) stale.push_back(ptr);
-
-        for (auto* ptr : stale) {
-            auto it = m_meshData.find(ptr);
-            DeferredBuffers deferred;
-            deferred.frameIndex   = m_frameCounter;
-            deferred.vertexBuffer = it->second.vertexBuffer;
-            deferred.indexBuffer  = it->second.indexBuffer;
-            deferred.matBuffers   = it->second.matBuffers;
-            it->second.vertexBuffer = {};
-            it->second.indexBuffer  = {};
-            for (auto& b : it->second.matBuffers) b = {};
-            m_deletionQueue.push_back(std::move(deferred));
-            m_meshData.erase(it);
-        }
-    }
-
-    ++m_frameCounter;
-
-    for (auto& mesh : scene.meshes())
-        if (!mesh->gpuReady) uploadMeshToGPU(*mesh);
-
-    uint32_t frameIdx = m_currentFrame;
-    uint32_t imageIdx = 0;
-    VkResult res = m_swapchain->acquireNextImage(frameIdx, imageIdx);
-    if (res == VK_ERROR_OUT_OF_DATE_KHR) { handleResize(); return; }
-    if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
-        throw std::runtime_error("Failed to acquire swapchain image");
-
-    // Flush deferred deletions for frames that have fully retired
-    {
-        const uint64_t safeFrame = m_frameCounter > MAX_FRAMES_IN_FLIGHT
-                                 ? m_frameCounter - MAX_FRAMES_IN_FLIGHT - 1
-                                 : 0;
-        auto it = m_deletionQueue.begin();
-        while (it != m_deletionQueue.end()) {
-            if (it->frameIndex <= safeFrame) {
-                m_ctx->destroyBuffer(it->vertexBuffer);
-                m_ctx->destroyBuffer(it->indexBuffer);
-                for (auto& buf : it->matBuffers) m_ctx->destroyBuffer(buf);
-                it = m_deletionQueue.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    auto& frame = m_swapchain->frame(frameIdx);
-    vkResetFences(m_ctx->device(), 1, &frame.inFlightFence);
-    vkResetCommandBuffer(frame.commandBuffer, 0);
-
-    updateGlobalDescriptors(frameIdx);
-
-    m_stats.drawCalls = 0;
-    recordCommandBuffer(frame.commandBuffer, imageIdx, scene, frameIdx);
-
-    VkSubmitInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    si.waitSemaphoreCount   = 1;
-    VkSemaphore imgAvailSem = m_swapchain->imageAvailableSemaphore(frameIdx);
-    si.pWaitSemaphores      = &imgAvailSem;
-    si.pWaitDstStageMask    = &waitStage;
-    si.commandBufferCount   = 1;
-    si.pCommandBuffers      = &frame.commandBuffer;
-    si.signalSemaphoreCount = 1;
-    VkSemaphore renderFinishedSem = m_swapchain->renderFinishedSemaphore(imageIdx);
-    si.pSignalSemaphores    = &renderFinishedSem;
-    VK_CHECK(vkQueueSubmit(m_ctx->graphicsQueue(), 1, &si, frame.inFlightFence), "Queue submit");
-
-    res = m_swapchain->present(imageIdx);
-    if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR || m_window.wasResized()) {
-        m_window.resetResizeFlag();
-        handleResize();
-    }
-
-    m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-
-    auto t1 = std::chrono::high_resolution_clock::now();
-    m_stats.frameTimeMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
-    m_stats.fps = 1000.f / (m_stats.frameTimeMs + 1e-6f);
-}
-
-// ─── Descriptor pool ──────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Descriptor pool
+// ─────────────────────────────────────────────────────────────────────────────
 void Renderer::createDescriptorPool() {
-    std::vector<VkDescriptorPoolSize> sizes = {
+    VkDescriptorPoolSize sizes[] = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         512 },
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 512 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,          64 },
     };
     VkDescriptorPoolCreateInfo ci{};
     ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     ci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     ci.maxSets       = MAX_DESCRIPTOR_SETS;
-    ci.poolSizeCount = static_cast<uint32_t>(sizes.size());
-    ci.pPoolSizes    = sizes.data();
-    VK_CHECK(vkCreateDescriptorPool(m_ctx->device(), &ci, nullptr, &m_descriptorPool), "Descriptor pool");
+    ci.poolSizeCount = 3;
+    ci.pPoolSizes    = sizes;
+    VK_CHECK(vkCreateDescriptorPool(m_ctx->device(), &ci, nullptr, &m_descPool));
 }
 
-void Renderer::createGlobalDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{{
-        { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-        { 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-        { 2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-        { 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-    }};
-    VkDescriptorSetLayoutCreateInfo ci{};
-    ci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    ci.bindingCount = static_cast<uint32_t>(bindings.size());
-    ci.pBindings    = bindings.data();
-    VK_CHECK(vkCreateDescriptorSetLayout(m_ctx->device(), &ci, nullptr, &m_globalSetLayout), "Global DSL");
+// ─────────────────────────────────────────────────────────────────────────────
+// Descriptor set layouts
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::createDescriptorLayouts() {
+    auto make = [this](std::initializer_list<VkDescriptorSetLayoutBinding> bindings) {
+        std::vector<VkDescriptorSetLayoutBinding> b(bindings);
+        VkDescriptorSetLayoutCreateInfo ci{};
+        ci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        ci.bindingCount = static_cast<uint32_t>(b.size());
+        ci.pBindings    = b.data();
+        VkDescriptorSetLayout l;
+        VK_CHECK(vkCreateDescriptorSetLayout(m_ctx->device(), &ci, nullptr, &l));
+        return l;
+    };
+    using B = VkDescriptorSetLayoutBinding;
+    constexpr auto UBO  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    constexpr auto CIS  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    constexpr auto SSBO = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    constexpr auto VS   = VK_SHADER_STAGE_VERTEX_BIT;
+    constexpr auto FS   = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    m_frameLayout    = make({ B{0,UBO,1,VS|FS,nullptr} });
+    m_matLayout      = make({ B{0,CIS,1,FS,nullptr}, B{1,CIS,1,FS,nullptr}, B{2,CIS,1,FS,nullptr},
+                               B{3,CIS,1,FS,nullptr}, B{4,CIS,1,FS,nullptr}, B{5,UBO,1,FS,nullptr} });
+    m_gbufLayout     = make({ B{0,CIS,1,FS,nullptr}, B{1,CIS,1,FS,nullptr}, B{2,CIS,1,FS,nullptr},
+                               B{3,CIS,1,FS,nullptr}, B{4,CIS,1,FS,nullptr}, B{5,CIS,1,FS,nullptr},
+                               B{6,CIS,1,FS,nullptr} });
+    m_ssaoLayout     = make({ B{0,CIS,1,FS,nullptr}, B{1,CIS,1,FS,nullptr},
+                               B{2,CIS,1,FS,nullptr}, B{3,UBO,1,FS,nullptr} });
+    m_ssaoBlurLayout = make({ B{0,CIS,1,FS,nullptr}, B{1,CIS,1,FS,nullptr} });
+    m_lightLayout    = make({ B{0,SSBO,1,FS,nullptr} });
+    m_hdrLayout      = make({ B{0,CIS,1,FS,nullptr} });
 }
 
-void Renderer::createGlobalDescriptorSets() {
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        m_cameraUBOs[i] = m_ctx->createBuffer(sizeof(CameraUBO),
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        m_sceneUBOs[i]  = m_ctx->createBuffer(sizeof(SceneUBO),
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+// ─────────────────────────────────────────────────────────────────────────────
+// Render passes
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::createGeometryRenderPass() {
+    // Descriptions are filled by gbuffer_attachment_descs() which returns
+    // finalLayout=SHADER_READ_ONLY for color and DEPTH_STENCIL_READ_ONLY for depth.
+    // We override the depth finalLayout to DEPTH_STENCIL_READ_ONLY_OPTIMAL so the
+    // SSAO and lighting passes can sample from it directly.
+    VkAttachmentDescription atts[GBUFFER_COLOR_COUNT + 1];
+    uint32_t count;
+    gbuffer_attachment_descs(m_gbuffer, atts, &count);
+
+    VkAttachmentReference colorRefs[GBUFFER_COLOR_COUNT];
+    for (uint32_t i = 0; i < GBUFFER_COLOR_COUNT; ++i)
+        colorRefs[i] = {i, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthRef{GBUFFER_COLOR_COUNT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+
+    VkSubpassDescription sub{};
+    sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount    = GBUFFER_COLOR_COUNT;
+    sub.pColorAttachments       = colorRefs;
+    sub.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency deps[2]{};
+    deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL; deps[0].dstSubpass = 0;
+    deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass    = 0; deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    VkRenderPassCreateInfo rpCI{};
+    rpCI.sType=VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpCI.attachmentCount=count; rpCI.pAttachments=atts;
+    rpCI.subpassCount=1;        rpCI.pSubpasses=&sub;
+    rpCI.dependencyCount=2;     rpCI.pDependencies=deps;
+    VK_CHECK(vkCreateRenderPass(m_ctx->device(), &rpCI, nullptr, &m_geomRP), "Geometry RP");
+}
+
+static VkRenderPass makeSingleAttachRP(VkDevice dev, VkFormat fmt,
+                                        VkImageLayout finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+{
+    VkAttachmentDescription att{};
+    att.format=fmt; att.samples=VK_SAMPLE_COUNT_1_BIT;
+    att.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR; att.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+    att.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE; att.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED; att.finalLayout=finalLayout;
+
+    VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sub{};
+    sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount=1; sub.pColorAttachments=&ref;
+
+    VkSubpassDependency deps[2]{};
+    deps[0].srcSubpass=VK_SUBPASS_EXTERNAL; deps[0].dstSubpass=0;
+    deps[0].srcStageMask=VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[0].dstStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[0].srcAccessMask=VK_ACCESS_SHADER_READ_BIT; deps[0].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass=0; deps[1].dstSubpass=VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].dstStageMask=VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; deps[1].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+
+    VkRenderPassCreateInfo ci{};
+    ci.sType=VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    ci.attachmentCount=1; ci.pAttachments=&att;
+    ci.subpassCount=1;    ci.pSubpasses=&sub;
+    ci.dependencyCount=2; ci.pDependencies=deps;
+    VkRenderPass rp;
+    VK_CHECK(vkCreateRenderPass(dev, &ci, nullptr, &rp));
+    return rp;
+}
+
+void Renderer::createSSAORenderPass()     { m_ssaoRP    = makeSingleAttachRP(m_ctx->device(), VK_FORMAT_R8_UNORM); }
+void Renderer::createSSAOBlurRenderPass() { m_ssaoBlurRP = makeSingleAttachRP(m_ctx->device(), VK_FORMAT_R8_UNORM); }
+void Renderer::createLightingRenderPass() { m_lightingRP = makeSingleAttachRP(m_ctx->device(), VK_FORMAT_R16G16B16A16_SFLOAT); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Size-dependent resources (G-buffer, intermediate images, framebuffers)
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::createSizeDependentResources() {
+    VkExtent2D ext = m_swapchain->extent();
+    uint32_t w = ext.width, h = ext.height;
+
+    gbuffer_create(m_gbuffer, *m_ctx, w, h);
+
+    if (!m_screenSampler) {
+        VkSamplerCreateInfo si{};
+        si.sType=VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter=VK_FILTER_NEAREST; si.minFilter=VK_FILTER_NEAREST;
+        si.addressModeU=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeV=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST; si.maxLod=1.f;
+        VK_CHECK(vkCreateSampler(m_ctx->device(), &si, nullptr, &m_screenSampler));
     }
 
-    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
-    layouts.fill(m_globalSetLayout);
-    VkDescriptorSetAllocateInfo ai{};
-    ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    ai.descriptorPool     = m_descriptorPool;
-    ai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
-    ai.pSetLayouts        = layouts.data();
-    VK_CHECK(vkAllocateDescriptorSets(m_ctx->device(), &ai, m_globalSets.data()), "Global DS alloc");
-}
-
-void Renderer::updateGlobalDescriptors(uint32_t frameIdx) {
-    if (!m_window.settings().width) return;
-
-    VkDescriptorBufferInfo camInfo   { m_cameraUBOs[frameIdx].buffer, 0, sizeof(CameraUBO) };
-    VkDescriptorBufferInfo sceneInfo { m_sceneUBOs[frameIdx].buffer,  0, sizeof(SceneUBO)  };
-    VkDescriptorBufferInfo shadowInfo{ m_shadow.ubos[frameIdx].buffer, 0, sizeof(ShadowUBO) };
-    VkDescriptorImageInfo  shadowImg {
-        m_shadow.sampler, m_shadow.arrayView,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    auto makeImg = [&](VkFormat fmt, VkImageUsageFlags usage, AllocatedImage& img) {
+        img = m_ctx->createImage(w, h, 1, VK_SAMPLE_COUNT_1_BIT, fmt,
+            VK_IMAGE_TILING_OPTIMAL, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        img.mipLevels = 1;
+        m_ctx->createImageView(img, VK_IMAGE_ASPECT_COLOR_BIT);
     };
 
-    std::array<VkWriteDescriptorSet, 4> writes{};
-    writes[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                  m_globalSets[frameIdx], 0, 0, 1,
-                  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &camInfo };
-    writes[1] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                  m_globalSets[frameIdx], 1, 0, 1,
-                  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &sceneInfo };
-    writes[2] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                  m_globalSets[frameIdx], 2, 0, 1,
-                  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &shadowInfo };
-    writes[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                  m_globalSets[frameIdx], 3, 0, 1,
-                  VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &shadowImg, nullptr };
-    vkUpdateDescriptorSets(m_ctx->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-}
+    constexpr VkImageUsageFlags sampledColor =
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 
-// ─── Pipeline management ──────────────────────────────────────────────────────
-VkDescriptorSetLayout Renderer::getOrCreateMatDescLayout(std::string_view shaderName,
-                                                          uint32_t texCount)
-{
-    std::string key = std::string(shaderName) + "::" + std::to_string(texCount);
-    if (auto it = m_matDescLayouts.find(key); it != m_matDescLayouts.end()) return it->second;
+    makeImg(VK_FORMAT_R8_UNORM,               sampledColor, m_ssaoRaw);
+    makeImg(VK_FORMAT_R8_UNORM,               sampledColor, m_ssaoBlur);
+    makeImg(VK_FORMAT_R16G16B16A16_SFLOAT,    sampledColor, m_hdrImage);
 
-    std::vector<VkDescriptorSetLayoutBinding> bindings;
-    bindings.push_back({ 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr });
-    for (uint32_t i = 0; i < texCount; ++i)
-        bindings.push_back({ i+1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr });
-
-    VkDescriptorSetLayoutCreateInfo ci{};
-    ci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    ci.bindingCount = static_cast<uint32_t>(bindings.size());
-    ci.pBindings    = bindings.data();
-    VkDescriptorSetLayout layout;
-    VK_CHECK(vkCreateDescriptorSetLayout(m_ctx->device(), &ci, nullptr, &layout), "Mat DSL");
-    m_matDescLayouts[key] = layout;
-    return layout;
-}
-
-PipelineEntry& Renderer::getOrCreatePipeline(std::string_view shaderName,
-                                               const PipelineSettings& ps,
-                                               VkDescriptorSetLayout matLayout)
-{
-    std::string key = std::string(shaderName) + "::"
-                    + std::to_string(static_cast<int>(ps.cullMode)) + "::"
-                    + std::to_string(static_cast<int>(ps.polygonMode)) + "::"
-                    + std::to_string(ps.alphaBlend);
-    if (auto it = m_pipelineCache.find(key); it != m_pipelineCache.end()) return it->second;
-
-    auto entry = createPipeline(shaderName, ps, matLayout);
-    m_pipelineCache[key] = entry;
-    return m_pipelineCache[key];
-}
-
-PipelineEntry Renderer::createPipeline(std::string_view shaderName,
-                                        const PipelineSettings& ps,
-                                        VkDescriptorSetLayout matLayout)
-{
-    auto vertPath = m_settings.shaderDir / (std::string(shaderName) + ".vert.spv");
-    auto fragPath = m_settings.shaderDir / (std::string(shaderName) + ".frag.spv");
-    VkShaderModule vertModule = createShaderModule(vertPath);
-    VkShaderModule fragModule = createShaderModule(fragPath);
-
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;   stages[0].module = vertModule; stages[0].pName = "main";
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fragModule; stages[1].pName = "main";
-
-    auto bindDesc = Vertex::getBindingDescription();
-    auto attrDesc = Vertex::getAttributeDescriptions();
-    VkPipelineVertexInputStateCreateInfo vi{};
-    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vi.vertexBindingDescriptionCount = 1;
-    vi.pVertexBindingDescriptions    = &bindDesc;
-    const uint32_t attrCount = (shaderName == "pbr") ? 4u : 3u;
-    vi.vertexAttributeDescriptionCount = attrCount;
-    vi.pVertexAttributeDescriptions    = attrDesc.data();
-
-    VkPipelineInputAssemblyStateCreateInfo ia{};
-    ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkViewport vp{0,0,1,1,0,1}; VkRect2D sc{{0,0},{1,1}};
-    VkPipelineViewportStateCreateInfo vpState{};
-    vpState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    vpState.viewportCount = 1; vpState.pViewports = &vp;
-    vpState.scissorCount  = 1; vpState.pScissors  = &sc;
-
-    VkPipelineRasterizationStateCreateInfo rast{};
-    rast.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rast.polygonMode = (ps.polygonMode == PolygonMode::Wireframe) ? VK_POLYGON_MODE_LINE :
-                       (ps.polygonMode == PolygonMode::Points)    ? VK_POLYGON_MODE_POINT :
-                                                                     VK_POLYGON_MODE_FILL;
-    rast.cullMode    = (ps.cullMode == CullMode::None)         ? VK_CULL_MODE_NONE :
-                       (ps.cullMode == CullMode::Front)        ? VK_CULL_MODE_FRONT_BIT :
-                       (ps.cullMode == CullMode::FrontAndBack) ? VK_CULL_MODE_FRONT_AND_BACK :
-                                                                  VK_CULL_MODE_BACK_BIT;
-    rast.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rast.lineWidth   = 1.f;
-
-    VkSampleCountFlagBits sampleCount = m_ppActive ? VK_SAMPLE_COUNT_1_BIT
-                                                    : m_swapchain->sampleCount();
-    VkPipelineMultisampleStateCreateInfo ms{};
-    ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    ms.rasterizationSamples = sampleCount;
-    ms.sampleShadingEnable  = (sampleCount != VK_SAMPLE_COUNT_1_BIT) ? VK_TRUE : VK_FALSE;
-    ms.minSampleShading     = 0.2f;
-
-    VkPipelineDepthStencilStateCreateInfo ds{};
-    ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    ds.depthTestEnable  = ps.depthTest  ? VK_TRUE : VK_FALSE;
-    ds.depthWriteEnable = ps.depthWrite ? VK_TRUE : VK_FALSE;
-    ds.depthCompareOp   = VK_COMPARE_OP_LESS;
-
-    VkPipelineColorBlendAttachmentState blendAttach{};
-    blendAttach.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                 VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    if (ps.alphaBlend) {
-        blendAttach.blendEnable         = VK_TRUE;
-        blendAttach.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        blendAttach.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        blendAttach.colorBlendOp        = VK_BLEND_OP_ADD;
-        blendAttach.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        blendAttach.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-        blendAttach.alphaBlendOp        = VK_BLEND_OP_ADD;
+    // ── Framebuffers ──────────────────────────────────────────────────────────
+    {   // Geometry: 5 G-buffer color views + depth
+        std::array<VkImageView, GBUFFER_COLOR_COUNT + 1> views;
+        for (uint32_t i = 0; i < GBUFFER_COLOR_COUNT; ++i) views[i] = m_gbuffer.colorView(i);
+        views[GBUFFER_COLOR_COUNT] = m_gbuffer.depthView();
+        VkFramebufferCreateInfo fi{};
+        fi.sType=VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fi.renderPass=m_geomRP; fi.attachmentCount=GBUFFER_COLOR_COUNT+1;
+        fi.pAttachments=views.data(); fi.width=w; fi.height=h; fi.layers=1;
+        VK_CHECK(vkCreateFramebuffer(m_ctx->device(), &fi, nullptr, &m_geomFB));
     }
-    VkPipelineColorBlendStateCreateInfo blend{};
-    blend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend.attachmentCount = 1;
-    blend.pAttachments    = &blendAttach;
 
-    std::array<VkDynamicState, 2> dynStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dyn{};
-    dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dyn.dynamicStateCount = static_cast<uint32_t>(dynStates.size());
-    dyn.pDynamicStates    = dynStates.data();
-
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    pushRange.size       = sizeof(ModelPushConstant);
-
-    std::array<VkDescriptorSetLayout, 2> setLayouts = { m_globalSetLayout, matLayout };
-    VkPipelineLayoutCreateInfo layoutCI{};
-    layoutCI.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutCI.setLayoutCount         = static_cast<uint32_t>(setLayouts.size());
-    layoutCI.pSetLayouts            = setLayouts.data();
-    layoutCI.pushConstantRangeCount = 1;
-    layoutCI.pPushConstantRanges    = &pushRange;
-
-    PipelineEntry entry;
-    VK_CHECK(vkCreatePipelineLayout(m_ctx->device(), &layoutCI, nullptr, &entry.layout), "Pipeline layout");
-
-    VkGraphicsPipelineCreateInfo pci{};
-    pci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pci.stageCount          = 2;
-    pci.pStages             = stages;
-    pci.pVertexInputState   = &vi;
-    pci.pInputAssemblyState = &ia;
-    pci.pViewportState      = &vpState;
-    pci.pRasterizationState = &rast;
-    pci.pMultisampleState   = &ms;
-    pci.pDepthStencilState  = &ds;
-    pci.pColorBlendState    = &blend;
-    pci.pDynamicState       = &dyn;
-    pci.layout              = entry.layout;
-    pci.renderPass          = m_sceneRenderPass;
-    pci.flags               = VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT;
-
-    VK_CHECK(vkCreateGraphicsPipelines(m_ctx->device(), m_pipelineCache_vk, 1, &pci, nullptr, &entry.pipeline),
-             "Create graphics pipeline: " + std::string(shaderName));
-
-    vkDestroyShaderModule(m_ctx->device(), vertModule, nullptr);
-    vkDestroyShaderModule(m_ctx->device(), fragModule, nullptr);
-    return entry;
+    auto make1FB = [&](VkRenderPass rp, VkImageView v, VkFramebuffer& fb) {
+        VkFramebufferCreateInfo fi{};
+        fi.sType=VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fi.renderPass=rp; fi.attachmentCount=1; fi.pAttachments=&v;
+        fi.width=w; fi.height=h; fi.layers=1;
+        VK_CHECK(vkCreateFramebuffer(m_ctx->device(), &fi, nullptr, &fb));
+    };
+    make1FB(m_ssaoRP,     m_ssaoRaw.view,  m_ssaoFB);
+    make1FB(m_ssaoBlurRP, m_ssaoBlur.view, m_ssaoBlurFB);
+    make1FB(m_lightingRP, m_hdrImage.view, m_lightingFB);
 }
 
+void Renderer::destroySizeDependentResources() {
+    auto dev = m_ctx->device();
+    for (VkFramebuffer* fb : {&m_geomFB,&m_ssaoFB,&m_ssaoBlurFB,&m_lightingFB})
+        if (*fb) { vkDestroyFramebuffer(dev, *fb, nullptr); *fb=VK_NULL_HANDLE; }
+    gbuffer_destroy(m_gbuffer, *m_ctx);
+    m_ctx->destroyImage(m_ssaoRaw);
+    m_ctx->destroyImage(m_ssaoBlur);
+    m_ctx->destroyImage(m_hdrImage);
+    if (m_screenSampler) { vkDestroySampler(dev, m_screenSampler, nullptr); m_screenSampler=VK_NULL_HANDLE; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-frame buffers
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::createPerFrameBuffers() {
+    constexpr VkMemoryPropertyFlags hostFlags =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (auto& f : m_frames) {
+        f.frameUBO  = m_ctx->createBuffer(sizeof(FrameUBO),   VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostFlags);
+        f.lightSSBO = m_ctx->createBuffer(sizeof(LightSSBO),  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, hostFlags);
+        f.ssaoUBO   = m_ctx->createBuffer(sizeof(SSAOParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hostFlags);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SSAO hemisphere kernel + noise texture
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::createSSAOKernel() {
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<float> dist(0.f, 1.f);
+    for (uint32_t i = 0; i < 32; ++i) {
+        Vec3 s{ dist(rng)*2.f-1.f, dist(rng)*2.f-1.f, dist(rng) };
+        s = glm::normalize(s) * dist(rng);
+        float t = static_cast<float>(i) / 32.f;
+        s *= glm::mix(0.1f, 1.f, t*t);
+        m_ssaoKernel[i] = Vec4(s, 0.f);
+    }
+
+    std::array<glm::vec2, 16> noise;
+    for (auto& n : noise) n = glm::normalize(glm::vec2(dist(rng)*2.f-1.f, dist(rng)*2.f-1.f));
+
+    VkDeviceSize sz = sizeof(noise);
+    auto staging = m_ctx->createBuffer(sz, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    std::memcpy(staging.mapped, noise.data(), static_cast<size_t>(sz));
+
+    m_ssaoNoise = m_ctx->createImage(4, 4, 1, VK_SAMPLE_COUNT_1_BIT,
+        VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    m_ssaoNoise.mipLevels = 1;
+    m_ctx->transitionImageLayout(m_ssaoNoise.image, VK_FORMAT_R16G16_SFLOAT,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1);
+    m_ctx->copyBufferToImage(staging.buffer, m_ssaoNoise.image, 4, 4);
+    m_ctx->transitionImageLayout(m_ssaoNoise.image, VK_FORMAT_R16G16_SFLOAT,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
+    m_ctx->destroyBuffer(staging);
+    m_ctx->createImageView(m_ssaoNoise, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    VkSamplerCreateInfo si{};
+    si.sType=VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter=VK_FILTER_NEAREST; si.minFilter=VK_FILTER_NEAREST;
+    si.addressModeU=VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    si.addressModeV=VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    si.addressModeW=VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    si.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST; si.maxLod=1.f;
+    VK_CHECK(vkCreateSampler(m_ctx->device(), &si, nullptr, &m_ssaoNoiseSampler));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Descriptor sets — allocate and write all fixed sets
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::allocateAndWriteDescriptorSets() {
+    auto alloc = [&](VkDescriptorSetLayout layout) {
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool=m_descPool; ai.descriptorSetCount=1; ai.pSetLayouts=&layout;
+        VkDescriptorSet ds;
+        VK_CHECK(vkAllocateDescriptorSets(m_ctx->device(), &ai, &ds));
+        return ds;
+    };
+
+    auto wUBO = [&](VkDescriptorSet ds, uint32_t bind, VkBuffer buf, VkDeviceSize sz) {
+        VkDescriptorBufferInfo bi{buf,0,sz};
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet=ds; w.dstBinding=bind; w.descriptorCount=1;
+        w.descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w.pBufferInfo=&bi;
+        vkUpdateDescriptorSets(m_ctx->device(),1,&w,0,nullptr);
+    };
+    auto wSSBO = [&](VkDescriptorSet ds, uint32_t bind, VkBuffer buf, VkDeviceSize sz) {
+        VkDescriptorBufferInfo bi{buf,0,sz};
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet=ds; w.dstBinding=bind; w.descriptorCount=1;
+        w.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w.pBufferInfo=&bi;
+        vkUpdateDescriptorSets(m_ctx->device(),1,&w,0,nullptr);
+    };
+    auto wImg = [&](VkDescriptorSet ds, uint32_t bind, VkImageView view, VkSampler samp,
+                     VkImageLayout layout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        VkDescriptorImageInfo ii{samp,view,layout};
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet=ds; w.dstBinding=bind; w.descriptorCount=1;
+        w.descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w.pImageInfo=&ii;
+        vkUpdateDescriptorSets(m_ctx->device(),1,&w,0,nullptr);
+    };
+
+    for (uint32_t fi=0; fi<MAX_FRAMES_IN_FLIGHT; ++fi) {
+        auto& f = m_frames[fi];
+        f.frameSet    = alloc(m_frameLayout);
+        f.gbufSet     = alloc(m_gbufLayout);
+        f.ssaoSet     = alloc(m_ssaoLayout);
+        f.ssaoBlurSet = alloc(m_ssaoBlurLayout);
+        f.lightSet    = alloc(m_lightLayout);
+        f.hdrSet      = alloc(m_hdrLayout);
+
+        wUBO(f.frameSet, 0, f.frameUBO.buffer, sizeof(FrameUBO));
+
+        for (uint32_t s=0; s<GBUFFER_COLOR_COUNT; ++s)
+            wImg(f.gbufSet, s, m_gbuffer.colorView(s), m_gbuffer.sampler);
+        wImg(f.gbufSet, 5, m_gbuffer.depthView(), m_gbuffer.sampler,
+             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        wImg(f.gbufSet, 6, m_ssaoBlur.view, m_screenSampler);
+
+        wImg(f.ssaoSet, 0, m_gbuffer.colorView(GBUF_NORMAL), m_gbuffer.sampler);
+        wImg(f.ssaoSet, 1, m_gbuffer.depthView(), m_gbuffer.sampler,
+             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        wImg(f.ssaoSet, 2, m_ssaoNoise.view, m_ssaoNoiseSampler);
+        wUBO(f.ssaoSet, 3, f.ssaoUBO.buffer, sizeof(SSAOParams));
+
+        wImg(f.ssaoBlurSet, 0, m_ssaoRaw.view,          m_screenSampler);
+        wImg(f.ssaoBlurSet, 1, m_gbuffer.depthView(), m_gbuffer.sampler,
+             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+
+        wSSBO(f.lightSet, 0, f.lightSSBO.buffer, sizeof(LightSSBO));
+        wImg(f.hdrSet,    0, m_hdrImage.view,    m_screenSampler);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pipeline creation
+// ─────────────────────────────────────────────────────────────────────────────
 VkShaderModule Renderer::createShaderModule(const std::filesystem::path& path) {
     auto code = readFile(path);
     VkShaderModuleCreateInfo ci{};
-    ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    ci.codeSize = code.size();
-    ci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
+    ci.sType=VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    ci.codeSize=code.size(); ci.pCode=reinterpret_cast<const uint32_t*>(code.data());
     VkShaderModule mod;
-    VK_CHECK(vkCreateShaderModule(m_ctx->device(), &ci, nullptr, &mod), "Shader module: " + path.string());
+    VK_CHECK(vkCreateShaderModule(m_ctx->device(), &ci, nullptr, &mod));
     return mod;
 }
 
-void Renderer::destroyPipelines() {
-    for (auto& [key, entry] : m_pipelineCache) {
-        if (entry.pipeline) vkDestroyPipeline(m_ctx->device(), entry.pipeline, nullptr);
-        if (entry.layout)   vkDestroyPipelineLayout(m_ctx->device(), entry.layout, nullptr);
-    }
-    m_pipelineCache.clear();
-    for (auto& [key, layout] : m_matDescLayouts)
-        vkDestroyDescriptorSetLayout(m_ctx->device(), layout, nullptr);
-    m_matDescLayouts.clear();
+// Fullscreen-triangle pipeline — no vertex buffers, no depth test.
+static VkPipeline buildScreenPipeline(VkDevice dev, VkPipelineCache cache,
+                                       VkShaderModule vert, VkShaderModule frag,
+                                       VkPipelineLayout layout, VkRenderPass rp,
+                                       uint32_t colorCount = 1)
+{
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0]={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT;   stages[0].module=vert; stages[0].pName="main";
+    stages[1]={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module=frag; stages[1].pName="main";
+
+    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkViewport vp{0,0,1,1,0,1}; VkRect2D sc{{0,0},{1,1}};
+    VkPipelineViewportStateCreateInfo vpS{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vpS.viewportCount=1; vpS.pViewports=&vp; vpS.scissorCount=1; vpS.pScissors=&sc;
+    VkPipelineRasterizationStateCreateInfo rast{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rast.polygonMode=VK_POLYGON_MODE_FILL; rast.cullMode=VK_CULL_MODE_NONE;
+    rast.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth=1.f;
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    std::vector<VkPipelineColorBlendAttachmentState> blends(colorCount);
+    for (auto& b : blends) b.colorWriteMask=0xF;
+    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blend.attachmentCount=colorCount; blend.pAttachments=blends.data();
+    VkDynamicState dynArr[2]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount=2; dyn.pDynamicStates=dynArr;
+
+    VkGraphicsPipelineCreateInfo pci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pci.stageCount=2; pci.pStages=stages;
+    pci.pVertexInputState=&vi; pci.pInputAssemblyState=&ia; pci.pViewportState=&vpS;
+    pci.pRasterizationState=&rast; pci.pMultisampleState=&ms;
+    pci.pDepthStencilState=&ds;   pci.pColorBlendState=&blend; pci.pDynamicState=&dyn;
+    pci.layout=layout; pci.renderPass=rp;
+
+    VkPipeline pipe;
+    VK_CHECK(vkCreateGraphicsPipelines(dev,cache,1,&pci,nullptr,&pipe));
+    return pipe;
 }
 
-// ─── Mesh GPU resources ───────────────────────────────────────────────────────
+void Renderer::createGeometryPipeline() {
+    VkPushConstantRange pc{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ModelPushConstant)};
+    VkDescriptorSetLayout sets[2]={m_frameLayout,m_matLayout};
+    VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    li.setLayoutCount=2; li.pSetLayouts=sets;
+    li.pushConstantRangeCount=1; li.pPushConstantRanges=&pc;
+    VK_CHECK(vkCreatePipelineLayout(m_ctx->device(),&li,nullptr,&m_geomPipeLayout));
+
+    auto vert=createShaderModule(m_settings.shaderDir/"geometry.vert.spv");
+    auto frag=createShaderModule(m_settings.shaderDir/"geometry.frag.spv");
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0]={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT;   stages[0].module=vert; stages[0].pName="main";
+    stages[1]={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module=frag; stages[1].pName="main";
+
+    auto bind=Vertex::getBindingDescription();
+    auto attr=Vertex::getAttributeDescriptions();
+    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vi.vertexBindingDescriptionCount=1;   vi.pVertexBindingDescriptions=&bind;
+    vi.vertexAttributeDescriptionCount=4; vi.pVertexAttributeDescriptions=attr.data();
+
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkViewport vp{0,0,1,1,0,1}; VkRect2D sc{{0,0},{1,1}};
+    VkPipelineViewportStateCreateInfo vpS{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vpS.viewportCount=1; vpS.pViewports=&vp; vpS.scissorCount=1; vpS.pScissors=&sc;
+    VkPipelineRasterizationStateCreateInfo rast{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rast.polygonMode=m_settings.wireframe?VK_POLYGON_MODE_LINE:VK_POLYGON_MODE_FILL;
+    rast.cullMode=VK_CULL_MODE_BACK_BIT; rast.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth=1.f;
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    ds.depthTestEnable=VK_TRUE; ds.depthWriteEnable=VK_TRUE; ds.depthCompareOp=VK_COMPARE_OP_LESS;
+    std::array<VkPipelineColorBlendAttachmentState,GBUFFER_COLOR_COUNT> blends{};
+    for (auto& b : blends) b.colorWriteMask=0xF;
+    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blend.attachmentCount=GBUFFER_COLOR_COUNT; blend.pAttachments=blends.data();
+    VkDynamicState dynArr[2]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount=2; dyn.pDynamicStates=dynArr;
+
+    VkGraphicsPipelineCreateInfo pci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pci.stageCount=2; pci.pStages=stages;
+    pci.pVertexInputState=&vi; pci.pInputAssemblyState=&ia; pci.pViewportState=&vpS;
+    pci.pRasterizationState=&rast; pci.pMultisampleState=&ms;
+    pci.pDepthStencilState=&ds;   pci.pColorBlendState=&blend; pci.pDynamicState=&dyn;
+    pci.layout=m_geomPipeLayout; pci.renderPass=m_geomRP;
+    VK_CHECK(vkCreateGraphicsPipelines(m_ctx->device(),m_pipelineCache,1,&pci,nullptr,&m_geomPipeline));
+    vkDestroyShaderModule(m_ctx->device(),vert,nullptr);
+    vkDestroyShaderModule(m_ctx->device(),frag,nullptr);
+}
+
+void Renderer::createSSAOPipeline() {
+    VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    li.setLayoutCount=1; li.pSetLayouts=&m_ssaoLayout;
+    VK_CHECK(vkCreatePipelineLayout(m_ctx->device(),&li,nullptr,&m_ssaoPipeLayout));
+    auto vert=createShaderModule(m_settings.shaderDir/"fullscreen_quad.vert.spv");
+    auto frag=createShaderModule(m_settings.shaderDir/"ssao.frag.spv");
+    m_ssaoPipeline=buildScreenPipeline(m_ctx->device(),m_pipelineCache,vert,frag,m_ssaoPipeLayout,m_ssaoRP);
+    vkDestroyShaderModule(m_ctx->device(),vert,nullptr);
+    vkDestroyShaderModule(m_ctx->device(),frag,nullptr);
+}
+
+void Renderer::createSSAOBlurPipeline() {
+    VkPushConstantRange pc{VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(BlurPC)};
+    VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    li.setLayoutCount=1; li.pSetLayouts=&m_ssaoBlurLayout;
+    li.pushConstantRangeCount=1; li.pPushConstantRanges=&pc;
+    VK_CHECK(vkCreatePipelineLayout(m_ctx->device(),&li,nullptr,&m_ssaoBlurPipeLayout));
+    auto vert=createShaderModule(m_settings.shaderDir/"fullscreen_quad.vert.spv");
+    auto frag=createShaderModule(m_settings.shaderDir/"ssao_blur.frag.spv");
+    m_ssaoBlurPipeline=buildScreenPipeline(m_ctx->device(),m_pipelineCache,vert,frag,m_ssaoBlurPipeLayout,m_ssaoBlurRP);
+    vkDestroyShaderModule(m_ctx->device(),vert,nullptr);
+    vkDestroyShaderModule(m_ctx->device(),frag,nullptr);
+}
+
+void Renderer::createLightingPipeline() {
+    VkDescriptorSetLayout sets[3]={m_gbufLayout,m_frameLayout,m_lightLayout};
+    VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    li.setLayoutCount=3; li.pSetLayouts=sets;
+    VK_CHECK(vkCreatePipelineLayout(m_ctx->device(),&li,nullptr,&m_lightPipeLayout));
+    auto vert=createShaderModule(m_settings.shaderDir/"fullscreen_quad.vert.spv");
+    auto frag=createShaderModule(m_settings.shaderDir/"lighting.frag.spv");
+    m_lightPipeline=buildScreenPipeline(m_ctx->device(),m_pipelineCache,vert,frag,m_lightPipeLayout,m_lightingRP);
+    vkDestroyShaderModule(m_ctx->device(),vert,nullptr);
+    vkDestroyShaderModule(m_ctx->device(),frag,nullptr);
+}
+
+void Renderer::createTonemapPipeline() {
+    VkPushConstantRange pc{VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(TonemapPC)};
+    VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    li.setLayoutCount=1; li.pSetLayouts=&m_hdrLayout;
+    li.pushConstantRangeCount=1; li.pPushConstantRanges=&pc;
+    VK_CHECK(vkCreatePipelineLayout(m_ctx->device(),&li,nullptr,&m_tonemapPipeLayout));
+    auto vert=createShaderModule(m_settings.shaderDir/"fullscreen_quad.vert.spv");
+    auto frag=createShaderModule(m_settings.shaderDir/"tonemap.frag.spv");
+    m_tonemapPipeline=buildScreenPipeline(m_ctx->device(),m_pipelineCache,vert,frag,
+                                           m_tonemapPipeLayout,m_swapchain->renderPass());
+    vkDestroyShaderModule(m_ctx->device(),vert,nullptr);
+    vkDestroyShaderModule(m_ctx->device(),frag,nullptr);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-mesh GPU data management
+// ─────────────────────────────────────────────────────────────────────────────
+MeshGPUData& Renderer::getOrCreateMeshData(Mesh* mesh) {
+    // Lock only for the initial allocation path. Once initialized, the entry
+    // is stable and the lock is released immediately so workers don't stall.
+    {
+        std::lock_guard<std::mutex> lock(m_meshDataMutex);
+        auto& d = m_meshData[mesh];
+        if (d.initialized) return d;
+
+        constexpr VkMemoryPropertyFlags hf =
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        for (uint32_t fi=0; fi<MAX_FRAMES_IN_FLIGHT; ++fi)
+            d.matUBOs[fi] = m_ctx->createBuffer(sizeof(MaterialUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, hf);
+
+        std::array<VkDescriptorSetLayout,MAX_FRAMES_IN_FLIGHT> layouts;
+        layouts.fill(m_matLayout);
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool=m_descPool; ai.descriptorSetCount=MAX_FRAMES_IN_FLIGHT; ai.pSetLayouts=layouts.data();
+        VK_CHECK(vkAllocateDescriptorSets(m_ctx->device(),&ai,d.matDescSets.data()));
+        d.initialized=true;
+        return d;
+    }
+}
+
+void Renderer::updateMaterialDescriptors(MeshGPUData& data, PBRMaterial* mat, uint32_t fi) {
+    if (!mat->isFrameDirty(fi) && (data.writtenFrames & (1u<<fi))) return;
+    std::memcpy(data.matUBOs[fi].mapped, &mat->ubo(), sizeof(MaterialUBO));
+
+    auto pick = [&](uint32_t slot, std::shared_ptr<Texture> fb) {
+        auto t = mat->getTexture(slot);
+        return t ? t->descriptorInfo() : fb->descriptorInfo();
+    };
+    VkDescriptorImageInfo imgs[MAX_TEXTURES_PER_MAT] = {
+        pick(PBRMaterial::ALBEDO,    m_whiteTexture),
+        pick(PBRMaterial::NORMAL,    m_flatNormalTexture),
+        pick(PBRMaterial::METALROUGH,m_whiteTexture),
+        pick(PBRMaterial::EMISSIVE,  m_whiteTexture),
+        pick(PBRMaterial::AO,        m_whiteTexture),
+    };
+    VkDescriptorBufferInfo bufI{data.matUBOs[fi].buffer,0,sizeof(MaterialUBO)};
+
+    std::array<VkWriteDescriptorSet,MAX_TEXTURES_PER_MAT+1> w{};
+    for (uint32_t i=0;i<MAX_TEXTURES_PER_MAT;++i) {
+        w[i]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[i].dstSet=data.matDescSets[fi]; w[i].dstBinding=i; w[i].descriptorCount=1;
+        w[i].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[i].pImageInfo=&imgs[i];
+    }
+    w[MAX_TEXTURES_PER_MAT]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[MAX_TEXTURES_PER_MAT].dstSet=data.matDescSets[fi]; w[MAX_TEXTURES_PER_MAT].dstBinding=MAX_TEXTURES_PER_MAT;
+    w[MAX_TEXTURES_PER_MAT].descriptorCount=1;
+    w[MAX_TEXTURES_PER_MAT].descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w[MAX_TEXTURES_PER_MAT].pBufferInfo=&bufI;
+    vkUpdateDescriptorSets(m_ctx->device(),static_cast<uint32_t>(w.size()),w.data(),0,nullptr);
+    data.writtenFrames |= (1u<<fi);
+    mat->markClean(fi);
+}
+
 void Renderer::uploadMeshToGPU(Mesh& mesh) {
-    if (mesh.vertices().empty()) { mesh.gpuReady = true; return; }
-    VkDeviceSize vSize = sizeof(Vertex)   * mesh.vertices().size();
-    VkDeviceSize iSize = sizeof(uint32_t) * mesh.indices().size();
-    mesh.vertexBuffer = m_ctx->uploadBuffer(mesh.vertices().data(), vSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    if (mesh.vertices().empty()) { mesh.gpuReady=true; return; }
+    VkDeviceSize vs=sizeof(Vertex)*mesh.vertices().size();
+    VkDeviceSize is=sizeof(uint32_t)*mesh.indices().size();
+    mesh.vertexBuffer=m_ctx->uploadBuffer(mesh.vertices().data(),vs,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     if (!mesh.indices().empty())
-        mesh.indexBuffer = m_ctx->uploadBuffer(mesh.indices().data(), iSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-    mesh.gpuReady = true;
-
-    auto& data = m_meshData[&mesh];
-    data.vertexBuffer = mesh.vertexBuffer;
-    data.indexBuffer  = mesh.indexBuffer;
+        mesh.indexBuffer=m_ctx->uploadBuffer(mesh.indices().data(),is,VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+    mesh.gpuReady=true;
 }
 
-MeshGPUData& Renderer::getOrCreateMeshData(Mesh* mesh, Material* mat) {
-    auto& data = m_meshData[mesh];
-    if (!data.initialized) {
-        VkDescriptorSetLayout matLayout = getOrCreateMatDescLayout(mat->shaderName(), MAX_TEXTURES_PER_MAT);
-        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-            VkDeviceSize propSize = std::max(mat->propertiesSize(), (size_t)16);
-            data.matBuffers[i] = m_ctx->createBuffer(propSize,
-                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+// ─────────────────────────────────────────────────────────────────────────────
+// Worker command pools
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::createWorkerPools(uint32_t count) {
+    m_workerPools.resize(count);
+    m_workerCmds.resize(count);
+    for (uint32_t w=0; w<count; ++w)
+        for (uint32_t f=0; f<MAX_FRAMES_IN_FLIGHT; ++f) {
+            VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+            ci.queueFamilyIndex=*m_ctx->queueFamilies().graphics;
+            ci.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+            VK_CHECK(vkCreateCommandPool(m_ctx->device(),&ci,nullptr,&m_workerPools[w][f]));
+            VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            ai.commandPool=m_workerPools[w][f]; ai.level=VK_COMMAND_BUFFER_LEVEL_SECONDARY; ai.commandBufferCount=1;
+            VK_CHECK(vkAllocateCommandBuffers(m_ctx->device(),&ai,&m_workerCmds[w][f]));
         }
-        std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
-        layouts.fill(matLayout);
-        VkDescriptorSetAllocateInfo ai{};
-        ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        ai.descriptorPool     = m_descriptorPool;
-        ai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
-        ai.pSetLayouts        = layouts.data();
-        VK_CHECK(vkAllocateDescriptorSets(m_ctx->device(), &ai, data.matDescSets.data()), "Mat DS alloc");
-        data.initialized = true;
-    }
-    return data;
 }
 
-void Renderer::updateMaterialDescriptors(MeshGPUData& data, Material* mat, uint32_t frameIdx) {
-    const uint32_t frameBit    = 1u << frameIdx;
-    const bool     neverWritten = !(data.writtenFrames & frameBit);
-    if (!mat->isFrameDirty(frameIdx) && !neverWritten) return;
-
-    if (mat->propertiesData())
-        std::memcpy(data.matBuffers[frameIdx].mapped,
-                    mat->propertiesData(), mat->propertiesSize());
-
-    std::vector<VkWriteDescriptorSet> writes;
-    VkDescriptorBufferInfo bufInfo{ data.matBuffers[frameIdx].buffer, 0,
-                                    std::max(mat->propertiesSize(), (size_t)16) };
-    VkWriteDescriptorSet w0{};
-    w0.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; w0.dstSet = data.matDescSets[frameIdx];
-    w0.dstBinding = 0; w0.descriptorCount = 1; w0.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    w0.pBufferInfo = &bufInfo;
-    writes.push_back(w0);
-
-    std::vector<VkDescriptorImageInfo> imgInfos;
-    for (uint32_t i = 0; i < MAX_TEXTURES_PER_MAT; ++i) {
-        auto tex = mat->getTexture(i);
-        if (!tex) tex = m_whiteTexture;
-        imgInfos.push_back(tex->descriptorInfo());
-    }
-    for (uint32_t i = 0; i < MAX_TEXTURES_PER_MAT; ++i) {
-        VkWriteDescriptorSet wi{};
-        wi.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wi.dstSet = data.matDescSets[frameIdx];
-        wi.dstBinding = i+1; wi.descriptorCount = 1;
-        wi.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wi.pImageInfo = &imgInfos[i];
-        writes.push_back(wi);
-    }
-    vkUpdateDescriptorSets(m_ctx->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-    data.writtenFrames |= frameBit;
-    mat->markClean(frameIdx);
+void Renderer::destroyWorkerPools() {
+    for (auto& pools : m_workerPools)
+        for (auto& p : pools)
+            if (p) { vkDestroyCommandPool(m_ctx->device(),p,nullptr); p=VK_NULL_HANDLE; }
+    m_workerPools.clear(); m_workerCmds.clear();
 }
 
-// ─── Frame recording ──────────────────────────────────────────────────────────
-void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIdx,
-                                    Scene& scene, uint32_t frameIdx)
-{
-    if (auto* cam = scene.camera()) {
-        cam->setAspect(m_window.getAspectRatio());
-        auto camUBO   = cam->toUBO(m_window.getTime());
-        auto sceneUBO = buildSceneUBOWithShadows(scene);
-        std::memcpy(m_cameraUBOs[frameIdx].mapped, &camUBO,   sizeof(CameraUBO));
-        std::memcpy(m_sceneUBOs[frameIdx].mapped,  &sceneUBO, sizeof(SceneUBO));
-    }
-
-    updateShadowData(scene, frameIdx);
-
-    VkCommandBufferBeginInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    VK_CHECK(vkBeginCommandBuffer(cmd, &bi), "Begin command buffer");
-
-    recordShadowPass(cmd, scene);
-
-    VkRenderPassBeginInfo rpBI{};
-    rpBI.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpBI.renderArea.extent = m_swapchain->extent();
-
-    std::array<VkClearValue, 2> clears{};
-    clears[0].color        = {{ m_settings.clearColor.r, m_settings.clearColor.g,
-                                 m_settings.clearColor.b, m_settings.clearColor.a }};
-    clears[1].depthStencil = { 1.f, 0 };
-    rpBI.clearValueCount   = static_cast<uint32_t>(clears.size());
-    rpBI.pClearValues      = clears.data();
-
-    if (m_ppActive) {
-        rpBI.renderPass  = m_offscreenRenderPass;
-        rpBI.framebuffer = m_offscreenFramebuffer;
-    } else {
-        rpBI.renderPass  = m_swapchain->renderPass();
-        rpBI.framebuffer = m_swapchain->framebuffer(imageIdx);
-    }
-
-    // ── Build visible mesh list into scratch buffer (no heap alloc after warm-up)
-    m_visibleScratch.clear();
-    if (m_settings.frustumCulling) {
-        m_visibleScratch = scene.visibleMeshes(m_threadPool.get());
-    } else {
-        m_visibleScratch.reserve(scene.meshes().size());
-        for (auto& m : scene.meshes()) m_visibleScratch.push_back(m.get());
-    }
-
-    m_stats.culledObjects = static_cast<uint32_t>(scene.meshes().size()) -
-                            static_cast<uint32_t>(m_visibleScratch.size());
-
-    // Pre-warm all GPU data and pipelines on the main thread
-    for (auto* mesh : m_visibleScratch) {
-        for (auto& sub : mesh->subMeshes()) {
-            auto* mat = sub.material.get();
-            if (!mat) continue;
-            if (auto* pbr = dynamic_cast<PBRMaterial*>(mat)) pbr->updateTextureFlags();
-            auto& data = getOrCreateMeshData(mesh, mat);
-            updateMaterialDescriptors(data, mat, frameIdx);
-            auto matLayout = getOrCreateMatDescLayout(mat->shaderName(), MAX_TEXTURES_PER_MAT);
-            PipelineSettings ps = mat->pipelineSettings;
-            if (m_settings.wireframe) ps.polygonMode = PolygonMode::Wireframe;
-            getOrCreatePipeline(mat->shaderName(), ps, matLayout);
-        }
-    }
-
-    // ── Build sorted draw list into scratch buffer
-    m_drawListScratch.clear();
-    buildDrawList(m_visibleScratch, frameIdx, m_drawListScratch);
-
-    // Populate totalVertices stat
-    m_stats.totalVertices = 0;
-    for (auto& dc : m_drawListScratch) {
-        const auto& sub = dc.mesh->subMeshes()[dc.subIndex];
-        m_stats.totalVertices += sub.indexCount;
-    }
-
-    uint32_t drawCalls  = 0;
-    uint32_t workerCount = m_threadPool->threadCount();
-    uint32_t drawCount   = static_cast<uint32_t>(m_drawListScratch.size());
-
-    const bool useSecondary = (workerCount > 1 && drawCount > 0);
-    vkCmdBeginRenderPass(cmd, &rpBI,
-        useSecondary ? VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
-                     : VK_SUBPASS_CONTENTS_INLINE);
-
-    if (useSecondary) {
-        uint32_t batchSize = std::max(1u, (drawCount + workerCount - 1) / workerCount);
-        std::vector<std::future<VkCommandBuffer>> futures;
-        futures.reserve(workerCount);
-
-        for (uint32_t wIdx = 0; wIdx < workerCount; ++wIdx) {
-            uint32_t start = wIdx * batchSize;
-            if (start >= drawCount) break;
-            uint32_t end = std::min(start + batchSize, drawCount);
-            std::vector<DrawCall> batch(m_drawListScratch.begin() + start,
-                                        m_drawListScratch.begin() + end);
-
-            futures.push_back(m_threadPool->submit([this, batch = std::move(batch),
-                                                     frameIdx, wIdx]() mutable {
-                return recordSecondaryBatch(batch, frameIdx, wIdx);
-            }));
-        }
-
-        std::vector<VkCommandBuffer> secondaryCmds;
-        secondaryCmds.reserve(futures.size());
-        for (auto& f : futures) {
-            auto secCmd = f.get();
-            if (secCmd != VK_NULL_HANDLE) secondaryCmds.push_back(secCmd);
-        }
-        if (!secondaryCmds.empty())
-            vkCmdExecuteCommands(cmd, static_cast<uint32_t>(secondaryCmds.size()),
-                                 secondaryCmds.data());
-
-        drawCalls = drawCount;
-    } else {
-        VkViewport vp{};
-        vp.width    = static_cast<float>(m_swapchain->extent().width);
-        vp.height   = static_cast<float>(m_swapchain->extent().height);
-        vp.minDepth = 0.f; vp.maxDepth = 1.f;
-        vkCmdSetViewport(cmd, 0, 1, &vp);
-        VkRect2D sc{ {0,0}, m_swapchain->extent() };
-        vkCmdSetScissor(cmd, 0, 1, &sc);
-
-        for (auto& dc : m_drawListScratch)
-            drawMeshSubMesh(cmd, *dc.mesh, dc.subIndex, frameIdx, drawCalls);
-    }
-
-    vkCmdEndRenderPass(cmd);
-    m_stats.drawCalls = drawCalls;
-
-    if (m_ppActive) recordPPPass(cmd, imageIdx, frameIdx);
-
-    VK_CHECK(vkEndCommandBuffer(cmd), "End command buffer");
-}
-
-// ─── Resize ───────────────────────────────────────────────────────────────────
-void Renderer::handleResize() {
-    auto [w, h] = m_window.getFramebufferSize();
-    while (w == 0 || h == 0) {
-        glfwWaitEvents();
-        auto [nw, nh] = m_window.getFramebufferSize();
-        w = nw; h = nh;
-    }
-    m_ctx->waitIdle();
-    destroyPipelines();
-
-    if (m_ppActive) {
-        shutdownPostProcess();
-        m_ppActive = true;
-        m_swapchain->recreate(w, h);
-        initPostProcess();
-    } else {
-        m_swapchain->recreate(w, h);
-        m_sceneRenderPass = m_swapchain->renderPass();
-    }
-}
-
-// ─── Shadow resources ─────────────────────────────────────────────────────────
-void Renderer::createShadowResources() {
-    VkFormat depthFmt = VK_FORMAT_D32_SFLOAT;
-    {
-        VkFormatProperties p;
-        vkGetPhysicalDeviceFormatProperties(m_ctx->physicalDevice(), depthFmt, &p);
-        if (!(p.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT))
-            depthFmt = m_ctx->findDepthFormat();
-    }
-
-    m_shadow.depthArray = m_ctx->createImage(
-        SHADOW_MAP_RESOLUTION, SHADOW_MAP_RESOLUTION,
-        1, VK_SAMPLE_COUNT_1_BIT, depthFmt,
-        VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        MAX_SHADOW_MAPS);
-
-    {
-        VkImageViewCreateInfo ci{};
-        ci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        ci.image    = m_shadow.depthArray.image;
-        ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-        ci.format   = depthFmt;
-        ci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, MAX_SHADOW_MAPS };
-        VK_CHECK(vkCreateImageView(m_ctx->device(), &ci, nullptr, &m_shadow.arrayView), "Shadow array view");
-    }
-
-    for (uint32_t i = 0; i < MAX_SHADOW_MAPS; ++i) {
-        VkImageViewCreateInfo ci{};
-        ci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        ci.image    = m_shadow.depthArray.image;
-        ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        ci.format   = depthFmt;
-        ci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, i, 1 };
-        VK_CHECK(vkCreateImageView(m_ctx->device(), &ci, nullptr, &m_shadow.layerViews[i]), "Shadow layer view");
-    }
-
-    {
-        VkSamplerCreateInfo ci{};
-        ci.sType         = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        ci.magFilter     = VK_FILTER_LINEAR;
-        ci.minFilter     = VK_FILTER_LINEAR;
-        ci.addressModeU  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-        ci.addressModeV  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-        ci.addressModeW  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-        ci.borderColor   = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-        ci.compareEnable = VK_TRUE;
-        ci.compareOp     = VK_COMPARE_OP_LESS;
-        ci.mipmapMode    = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        VK_CHECK(vkCreateSampler(m_ctx->device(), &ci, nullptr, &m_shadow.sampler), "Shadow sampler");
-    }
-
-    {
-        VkAttachmentDescription att{};
-        att.format         = depthFmt;
-        att.samples        = VK_SAMPLE_COUNT_1_BIT;
-        att.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        att.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-        att.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        att.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;   // LOAD_OP_CLEAR — prior content discarded
-        att.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-        VkAttachmentReference ref{ 0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-        VkSubpassDescription sub{};
-        sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        sub.pDepthStencilAttachment = &ref;
-
-        VkSubpassDependency dep{};
-        dep.srcSubpass    = VK_SUBPASS_EXTERNAL;
-        dep.dstSubpass    = 0;
-        dep.srcStageMask  = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dep.dstStageMask  = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dep.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dep.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-
-        VkRenderPassCreateInfo ci{};
-        ci.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        ci.attachmentCount = 1;
-        ci.pAttachments    = &att;
-        ci.subpassCount    = 1;
-        ci.pSubpasses      = &sub;
-        ci.dependencyCount = 1;
-        ci.pDependencies   = &dep;
-        VK_CHECK(vkCreateRenderPass(m_ctx->device(), &ci, nullptr, &m_shadow.renderPass), "Shadow render pass");
-    }
-
-    for (uint32_t i = 0; i < MAX_SHADOW_MAPS; ++i) {
-        VkFramebufferCreateInfo ci{};
-        ci.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        ci.renderPass      = m_shadow.renderPass;
-        ci.attachmentCount = 1;
-        ci.pAttachments    = &m_shadow.layerViews[i];
-        ci.width           = SHADOW_MAP_RESOLUTION;
-        ci.height          = SHADOW_MAP_RESOLUTION;
-        ci.layers          = 1;
-        VK_CHECK(vkCreateFramebuffer(m_ctx->device(), &ci, nullptr, &m_shadow.framebuffers[i]), "Shadow FB");
-    }
-
-    {
-        VkPushConstantRange pcRange{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ShadowPushConstant) };
-        VkPipelineLayoutCreateInfo ci{};
-        ci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        ci.pushConstantRangeCount = 1;
-        ci.pPushConstantRanges    = &pcRange;
-        VK_CHECK(vkCreatePipelineLayout(m_ctx->device(), &ci, nullptr, &m_shadow.pipelineLayout), "Shadow PL");
-    }
-
-    {
-        auto vertMod = createShaderModule(m_settings.shaderDir / "shadow.vert.spv");
-
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_VERTEX_BIT;
-        stage.module = vertMod;
-        stage.pName  = "main";
-
-        auto bindDesc = Vertex::getBindingDescription();
-        auto attrDesc = Vertex::getAttributeDescriptions();
-        VkPipelineVertexInputStateCreateInfo vi{};
-        vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-        vi.vertexBindingDescriptionCount   = 1;
-        vi.pVertexBindingDescriptions      = &bindDesc;
-        vi.vertexAttributeDescriptionCount = 1;
-        vi.pVertexAttributeDescriptions    = attrDesc.data();
-
-        VkPipelineInputAssemblyStateCreateInfo ia{};
-        ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-        VkViewport vp{}; VkRect2D sc{};
-        VkPipelineViewportStateCreateInfo vpState{};
-        vpState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-        vpState.viewportCount = 1; vpState.pViewports = &vp;
-        vpState.scissorCount  = 1; vpState.pScissors  = &sc;
-
-        VkPipelineRasterizationStateCreateInfo rast{};
-        rast.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-        rast.polygonMode             = VK_POLYGON_MODE_FILL;
-        rast.cullMode                = VK_CULL_MODE_BACK_BIT;
-        rast.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        rast.depthBiasEnable         = VK_TRUE;
-        rast.depthBiasConstantFactor = 2.0f;
-        rast.depthBiasSlopeFactor    = 3.0f;
-        rast.lineWidth               = 1.f;
-
-        VkPipelineMultisampleStateCreateInfo ms{};
-        ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-        VkPipelineDepthStencilStateCreateInfo ds{};
-        ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        ds.depthTestEnable  = VK_TRUE;
-        ds.depthWriteEnable = VK_TRUE;
-        ds.depthCompareOp   = VK_COMPARE_OP_LESS;
-
-        std::array<VkDynamicState, 2> dynStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-        VkPipelineDynamicStateCreateInfo dyn{};
-        dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dyn.dynamicStateCount = static_cast<uint32_t>(dynStates.size());
-        dyn.pDynamicStates    = dynStates.data();
-
-        VkGraphicsPipelineCreateInfo ci{};
-        ci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        ci.stageCount          = 1;
-        ci.pStages             = &stage;
-        ci.pVertexInputState   = &vi;
-        ci.pInputAssemblyState = &ia;
-        ci.pViewportState      = &vpState;
-        ci.pRasterizationState = &rast;
-        ci.pMultisampleState   = &ms;
-        ci.pDepthStencilState  = &ds;
-        ci.pDynamicState       = &dyn;
-        ci.layout              = m_shadow.pipelineLayout;
-        ci.renderPass          = m_shadow.renderPass;
-        VK_CHECK(vkCreateGraphicsPipelines(m_ctx->device(), m_pipelineCache_vk, 1, &ci, nullptr, &m_shadow.pipeline),
-                 "Shadow pipeline");
-        vkDestroyShaderModule(m_ctx->device(), vertMod, nullptr);
-    }
-
-    for (auto& ubo : m_shadow.ubos)
-        ubo = m_ctx->createBuffer(sizeof(ShadowUBO),
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    {
-        auto cmd = m_ctx->beginSingleTimeCommands();
-        VkImageMemoryBarrier bar{};
-        bar.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        bar.srcAccessMask       = 0;
-        bar.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-        bar.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-        bar.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.image               = m_shadow.depthArray.image;
-        bar.subresourceRange    = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, MAX_SHADOW_MAPS };
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            0, 0, nullptr, 0, nullptr, 1, &bar);
-        m_ctx->endSingleTimeCommands(cmd);
-    }
-}
-
-void Renderer::destroyShadowResources() {
-    auto dev = m_ctx->device();
-    if (m_shadow.pipeline)       { vkDestroyPipeline      (dev, m_shadow.pipeline,       nullptr); m_shadow.pipeline       = VK_NULL_HANDLE; }
-    if (m_shadow.pipelineLayout) { vkDestroyPipelineLayout(dev, m_shadow.pipelineLayout, nullptr); m_shadow.pipelineLayout = VK_NULL_HANDLE; }
-    for (auto& fb : m_shadow.framebuffers) if (fb) { vkDestroyFramebuffer(dev, fb, nullptr); fb = VK_NULL_HANDLE; }
-    if (m_shadow.renderPass)     { vkDestroyRenderPass    (dev, m_shadow.renderPass,     nullptr); m_shadow.renderPass     = VK_NULL_HANDLE; }
-    if (m_shadow.sampler)        { vkDestroySampler       (dev, m_shadow.sampler,        nullptr); m_shadow.sampler        = VK_NULL_HANDLE; }
-    for (auto& v : m_shadow.layerViews) if (v) { vkDestroyImageView(dev, v, nullptr); v = VK_NULL_HANDLE; }
-    if (m_shadow.arrayView)      { vkDestroyImageView     (dev, m_shadow.arrayView,      nullptr); m_shadow.arrayView      = VK_NULL_HANDLE; }
-    m_ctx->destroyImage(m_shadow.depthArray);
-    for (auto& ubo : m_shadow.ubos) m_ctx->destroyBuffer(ubo);
-    m_shadow.count = 0;
-}
-
-void Renderer::updateShadowData(Scene& scene, uint32_t frameIdx) {
-    m_shadow.count = 0;
-    for (auto& light : scene.lights()) {
-        if (!light->castShadows() || m_shadow.count >= (int)MAX_SHADOW_MAPS) continue;
-        int   idx = m_shadow.count++;
-        LightData ld = light->toLightData();
-        int   type   = (int)ld.position.w;
-        Vec3  up;
-        Mat4  view, proj;
-
-        if (type == 1) {
-            Vec3 dir = glm::normalize(Vec3(ld.direction));
-            up = std::abs(dir.y) > 0.99f ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
-
-            // Shadow frustum constants — tune to your scene scale.
-            // shadowRange = half-size of the ortho box in world units.
-            // pullback    = how far behind the scene the shadow camera sits.
-            // shadowFar   = depth range (must be > pullback + scene depth).
-            const float shadowRange = 60.f;
-            const float pullback    = 150.f;
-            const float shadowNear  = 1.f;
-            const float shadowFar   = 400.f;
-
-            // --- Step 1: read current camera world position -------------------------
-            // (filled into the CameraUBO earlier in recordCommandBuffer)
-            Vec3 camPos = Vec3(0.f);
-            if (m_cameraUBOs[frameIdx].mapped) {
-                const auto* c = reinterpret_cast<const CameraUBO*>(m_cameraUBOs[frameIdx].mapped);
-                camPos = Vec3(c->position);
-            }
-
-            // --- Step 2: texel-snap the shadow centre to prevent shadow swimming ---
-            // Build a "reference" view matrix (centred at world origin) solely for
-            // snapping. We never render with it — we only use it to measure light-
-            // space X/Y so we can round to texel boundaries.
-            Mat4 snapView = glm::lookAt(-dir * pullback, Vec3(0.f), up);
-
-            // Project the camera's world position into that reference light-space.
-            Vec3 camLS = Vec3(snapView * Vec4(camPos, 1.f));
-
-            // The shadow ortho box covers 2*shadowRange world units mapped to
-            // SHADOW_MAP_RESOLUTION texels, so one texel = 2*range / resolution.
-            float texelSize = (2.f * shadowRange) / static_cast<float>(SHADOW_MAP_RESOLUTION);
-
-            // Snap X and Y independently; leave Z free (depth is not snapped).
-            camLS.x = std::floor(camLS.x / texelSize) * texelSize;
-            camLS.y = std::floor(camLS.y / texelSize) * texelSize;
-
-            // Unproject snapped position back to world space.
-            Vec3 snappedCenter = Vec3(glm::inverse(snapView) * Vec4(camLS, 1.f));
-
-            // --- Step 3: build final view + ortho from the snapped centre ----------
-            Vec3 shadowEye = snappedCenter - dir * pullback;
-            view = glm::lookAt(shadowEye, snappedCenter, up);
-            proj = glm::ortho(-shadowRange, shadowRange,
-                              -shadowRange, shadowRange,
-                               shadowNear,  shadowFar);
-        } else if (type == 2) {
-            Vec3 pos = Vec3(ld.position);
-            Vec3 dir = glm::normalize(Vec3(ld.direction));
-            up   = std::abs(dir.y) > 0.99f ? Vec3(1,0,0) : Vec3(0,1,0);
-            view = glm::lookAt(pos, pos + dir, up);
-            float fov = ld.params.x * 2.f + glm::radians(5.f);
-            proj = glm::perspective(fov, 1.f, 0.1f, ld.params.y);
-        } else {
-            m_shadow.count--;
-            continue;
-        }
-        proj[1][1] *= -1.f;
-        m_shadow.lightSpaces[idx] = proj * view;
-        m_shadow.casters[idx]     = light.get();
-        m_shadow.frustums[idx].extract(m_shadow.lightSpaces[idx]);
-    }
-
-    ShadowUBO ubo{};
-    ubo.count = m_shadow.count;
-    for (int i = 0; i < m_shadow.count; ++i) {
-        ubo.lightSpace[i] = m_shadow.lightSpaces[i];
-        ubo.params[i]     = Vec4(0.002f, 0.005f, 0.f, 0.f);
-    }
-    std::memcpy(m_shadow.ubos[frameIdx].mapped, &ubo, sizeof(ShadowUBO));
-}
-
-SceneUBO Renderer::buildSceneUBOWithShadows(Scene& scene) const {
-    SceneUBO ubo = scene.buildSceneUBO();
-    ubo.useLinearOutput = m_ppActive ? 1 : 0;
-
-    for (int i = 0; i < m_shadow.count; ++i) {
-        for (int j = 0; j < ubo.lightCount; ++j) {
-            if (scene.lights()[j].get() == m_shadow.casters[i]) {
-                ubo.lights[j].params.w = static_cast<float>(i);
-                break;
-            }
-        }
-    }
-    return ubo;
-}
-
-void Renderer::recordShadowPass(VkCommandBuffer cmd, Scene& scene) {
-    if (m_shadow.count == 0) return;
-
-    {
-        VkImageMemoryBarrier bar{};
-        bar.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        bar.srcAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-        bar.dstAccessMask       = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        bar.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-        bar.newLayout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.image               = m_shadow.depthArray.image;
-        bar.subresourceRange    = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, MAX_SHADOW_MAPS };
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-            0, 0, nullptr, 0, nullptr, 1, &bar);
-    }
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadow.pipeline);
-
-    VkViewport vp{ 0, 0, (float)SHADOW_MAP_RESOLUTION, (float)SHADOW_MAP_RESOLUTION, 0.f, 1.f };
-    VkRect2D   sc{ {0, 0}, {SHADOW_MAP_RESOLUTION, SHADOW_MAP_RESOLUTION} };
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    vkCmdSetScissor (cmd, 0, 1, &sc);
-
-    for (int i = 0; i < m_shadow.count; ++i) {
-        VkClearValue clearVal;
-        clearVal.depthStencil = { 1.0f, 0 };
-        VkRenderPassBeginInfo rpBI{};
-        rpBI.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        rpBI.renderPass        = m_shadow.renderPass;
-        rpBI.framebuffer       = m_shadow.framebuffers[i];
-        rpBI.renderArea.extent = { SHADOW_MAP_RESOLUTION, SHADOW_MAP_RESOLUTION };
-        rpBI.clearValueCount   = 1;
-        rpBI.pClearValues      = &clearVal;
-        vkCmdBeginRenderPass(cmd, &rpBI, VK_SUBPASS_CONTENTS_INLINE);
-
-        ShadowPushConstant pc;
-        pc.lightSpace = m_shadow.lightSpaces[i];
-
-        for (auto& mesh : scene.meshes()) {
-            if (!mesh->gpuReady || mesh->vertices().empty()) continue;
-            if (!m_shadow.frustums[i].containsAABB(mesh->worldBounds())) continue;
-
-            pc.model = mesh->modelMatrix();
-            vkCmdPushConstants(cmd, m_shadow.pipelineLayout,
-                               VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ShadowPushConstant), &pc);
-            VkDeviceSize offset = 0;
-            vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertexBuffer.buffer, &offset);
-            if (mesh->indexBuffer.buffer != VK_NULL_HANDLE) {
-                vkCmdBindIndexBuffer(cmd, mesh->indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-                for (auto& sub : mesh->subMeshes())
-                    vkCmdDrawIndexed(cmd, sub.indexCount, 1, sub.indexOffset, 0, 0);
-            } else {
-                vkCmdDraw(cmd, static_cast<uint32_t>(mesh->vertices().size()), 1, 0, 0);
-            }
-        }
-
-        vkCmdEndRenderPass(cmd);
-    }
-
-    {
-        VkImageMemoryBarrier bar{};
-        bar.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        bar.srcAccessMask       = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        bar.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-        bar.oldLayout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        bar.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.image               = m_shadow.depthArray.image;
-        bar.subresourceRange    = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, MAX_SHADOW_MAPS };
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            0, 0, nullptr, 0, nullptr, 1, &bar);
-    }
-}
-
-// ─── Worker command pools ─────────────────────────────────────────────────────
-void Renderer::createWorkerCommandPools(uint32_t workerCount) {
-    m_workerCmdPools.resize(workerCount);
-    m_workerCmdBuffers.resize(workerCount);
-
-    for (uint32_t wIdx = 0; wIdx < workerCount; ++wIdx) {
-        for (uint32_t fIdx = 0; fIdx < MAX_FRAMES_IN_FLIGHT; ++fIdx) {
-            VkCommandPoolCreateInfo ci{};
-            ci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-            ci.queueFamilyIndex = *m_ctx->queueFamilies().graphics;
-            ci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-            VK_CHECK(vkCreateCommandPool(m_ctx->device(), &ci, nullptr,
-                     &m_workerCmdPools[wIdx][fIdx]), "Worker command pool");
-
-            VkCommandBufferAllocateInfo ai{};
-            ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            ai.commandPool        = m_workerCmdPools[wIdx][fIdx];
-            ai.level              = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
-            ai.commandBufferCount = 1;
-            VK_CHECK(vkAllocateCommandBuffers(m_ctx->device(), &ai,
-                     &m_workerCmdBuffers[wIdx][fIdx]), "Worker command buffer");
-        }
-    }
-}
-
-void Renderer::destroyWorkerCommandPools() {
-    for (auto& pools : m_workerCmdPools)
-        for (auto& pool : pools)
-            if (pool) { vkDestroyCommandPool(m_ctx->device(), pool, nullptr); pool = VK_NULL_HANDLE; }
-    m_workerCmdPools.clear();
-    m_workerCmdBuffers.clear();
-}
-
-// ─── Build and sort draw list ─────────────────────────────────────────────────
-void Renderer::buildDrawList(const std::vector<Mesh*>& meshes,
-                              uint32_t /*frameIdx*/,
-                              std::vector<DrawCall>& out)
-{
-    out.reserve(out.size() + meshes.size() * 2);
-
-    for (uint32_t mId = 0; mId < static_cast<uint32_t>(meshes.size()); ++mId) {
-        auto* mesh = meshes[mId];
-        if (!mesh->gpuReady || mesh->vertices().empty()) continue;
-
-        for (uint32_t sIdx = 0; sIdx < static_cast<uint32_t>(mesh->subMeshes().size()); ++sIdx) {
-            const auto& sub = mesh->subMeshes()[sIdx];
-            auto* mat = sub.material.get();
-            if (!mat) continue;
-
-            uint64_t h = std::hash<std::string_view>{}(mat->shaderName());
-            h ^= static_cast<uint64_t>(mat->pipelineSettings.alphaBlend)  << 1;
-            h ^= static_cast<uint64_t>(mat->pipelineSettings.cullMode)     << 2;
-            h ^= static_cast<uint64_t>(mat->pipelineSettings.polygonMode)  << 4;
-            h ^= static_cast<uint64_t>(m_settings.wireframe)               << 6;
-
-            DrawCall dc;
-            dc.key.pipelineHash = h;
-            dc.key.meshId       = mId;
-            dc.mesh             = mesh;
-            dc.subIndex         = sIdx;
-            out.push_back(dc);
-        }
-    }
-
-    std::sort(out.begin(), out.end(), [](const DrawCall& a, const DrawCall& b) {
-        return a.key < b.key;
-    });
-}
-
-// ─── Record one submesh draw ──────────────────────────────────────────────────
-void Renderer::drawMeshSubMesh(VkCommandBuffer cmd, Mesh& mesh, uint32_t subIdx,
-                                uint32_t frameIdx, uint32_t& drawCalls)
-{
+// ─────────────────────────────────────────────────────────────────────────────
+// Draw a single mesh (all sub-meshes) into the geometry pass
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawMesh(VkCommandBuffer cmd, Mesh& mesh, uint32_t fi, uint32_t& dc) {
     if (!mesh.gpuReady || mesh.vertices().empty()) return;
-    const auto& sub = mesh.subMeshes()[subIdx];
-    auto* mat = sub.material.get();
-    if (!mat) return;
+    VkDeviceSize offset=0;
+    vkCmdBindVertexBuffers(cmd,0,1,&mesh.vertexBuffer.buffer,&offset);
+    if (mesh.indexBuffer.buffer!=VK_NULL_HANDLE)
+        vkCmdBindIndexBuffer(cmd,mesh.indexBuffer.buffer,0,VK_INDEX_TYPE_UINT32);
 
-    auto matLayout = getOrCreateMatDescLayout(mat->shaderName(), MAX_TEXTURES_PER_MAT);
-    PipelineSettings ps = mat->pipelineSettings;
-    if (m_settings.wireframe) ps.polygonMode = PolygonMode::Wireframe;
+    ModelPushConstant pc{mesh.modelMatrix(),mesh.normalMatrix()};
+    vkCmdPushConstants(cmd,m_geomPipeLayout,VK_SHADER_STAGE_VERTEX_BIT,0,sizeof(pc),&pc);
 
-    auto& pipeline = getOrCreatePipeline(mat->shaderName(), ps, matLayout);
-    auto& data     = m_meshData.at(&mesh);
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
-    std::array<VkDescriptorSet, 2> sets = { m_globalSets[frameIdx], data.matDescSets[frameIdx] };
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout, 0,
-                             static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
-
-    ModelPushConstant pc;
-    pc.model        = mesh.modelMatrix();
-    pc.normalMatrix = mesh.normalMatrix();
-    vkCmdPushConstants(cmd, pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT,
-                        0, sizeof(ModelPushConstant), &pc);
-
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &mesh.vertexBuffer.buffer, &offset);
-    vkCmdBindIndexBuffer(cmd, mesh.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cmd, sub.indexCount, 1, sub.indexOffset, 0, 0);
-    ++drawCalls;
+    for (auto& sub : mesh.subMeshes()) {
+        auto* mat=sub.material.get();
+        if (!mat) continue;
+        auto& data=getOrCreateMeshData(&mesh);
+        updateMaterialDescriptors(data,mat,fi);
+        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 m_geomPipeLayout,1,1,&data.matDescSets[fi],0,nullptr);
+        if (mesh.indexBuffer.buffer!=VK_NULL_HANDLE)
+            vkCmdDrawIndexed(cmd,sub.indexCount,1,sub.indexOffset,0,0);
+        else
+            vkCmdDraw(cmd,static_cast<uint32_t>(mesh.vertices().size()),1,0,0);
+        ++dc;
+    }
 }
 
-// ─── Record secondary command buffer for a batch ─────────────────────────────
-VkCommandBuffer Renderer::recordSecondaryBatch(const std::vector<DrawCall>& batch,
-                                                uint32_t frameIdx, uint32_t workerIdx)
+// ─────────────────────────────────────────────────────────────────────────────
+// Multi-threaded secondary command buffer for geometry batch
+// ─────────────────────────────────────────────────────────────────────────────
+VkCommandBuffer Renderer::recordSecondaryBatch(const std::vector<Mesh*>& batch,
+                                                uint32_t fi, uint32_t workerIdx)
 {
-    if (batch.empty() || workerIdx >= m_workerCmdPools.size()) return VK_NULL_HANDLE;
+    if (batch.empty()) return VK_NULL_HANDLE;
+    VkCommandBuffer cmd=m_workerCmds[workerIdx][fi];
+    vkResetCommandBuffer(cmd,0);
 
-    VkCommandBuffer cmd = m_workerCmdBuffers[workerIdx][frameIdx];
-    vkResetCommandBuffer(cmd, 0);
+    VkCommandBufferInheritanceInfo inh{VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO};
+    inh.renderPass=m_geomRP; inh.subpass=0; inh.framebuffer=m_geomFB;
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags=VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT|VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    bi.pInheritanceInfo=&inh;
+    vkBeginCommandBuffer(cmd,&bi);
 
-    VkCommandBufferInheritanceInfo inherit{};
-    inherit.sType      = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
-    inherit.renderPass = m_ppActive ? m_offscreenRenderPass : m_swapchain->renderPass();
-    inherit.subpass    = 0;
-
-    VkCommandBufferBeginInfo bi{};
-    bi.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    bi.flags            = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT |
-                          VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    bi.pInheritanceInfo = &inherit;
-    vkBeginCommandBuffer(cmd, &bi);
-
-    VkViewport vp{};
-    vp.width    = static_cast<float>(m_swapchain->extent().width);
-    vp.height   = static_cast<float>(m_swapchain->extent().height);
-    vp.minDepth = 0.f; vp.maxDepth = 1.f;
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    VkRect2D sc{ {0,0}, m_swapchain->extent() };
-    vkCmdSetScissor(cmd, 0, 1, &sc);
-
-    uint32_t dummy = 0;
-    for (const auto& dc : batch)
-        drawMeshSubMesh(cmd, *dc.mesh, dc.subIndex, frameIdx, dummy);
-
+    VkExtent2D ext=m_swapchain->extent();
+    VkViewport vp{0,0,(float)ext.width,(float)ext.height,0,1};
+    vkCmdSetViewport(cmd,0,1,&vp);
+    VkRect2D sc{{0,0},ext}; vkCmdSetScissor(cmd,0,1,&sc);
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_geomPipeline);
+    vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,
+                             m_geomPipeLayout,0,1,&m_frames[fi].frameSet,0,nullptr);
+    uint32_t dummy=0;
+    for (auto* m : batch) drawMesh(cmd,*m,fi,dummy);
     vkEndCommandBuffer(cmd);
     return cmd;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-pass recording
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::recordGeometryPass(VkCommandBuffer cmd, const std::vector<Mesh*>& visible, uint32_t fi) {
+    std::array<VkClearValue,GBUFFER_COLOR_COUNT+1> clears{};
+    for (uint32_t i=0;i<GBUFFER_COLOR_COUNT;++i) clears[i].color={{0,0,0,1}};
+    clears[GBUFFER_COLOR_COUNT].depthStencil={1.f,0};
+
+    VkExtent2D ext=m_swapchain->extent();
+    VkRenderPassBeginInfo rpBI{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rpBI.renderPass=m_geomRP; rpBI.framebuffer=m_geomFB;
+    rpBI.renderArea.extent=ext;
+    rpBI.clearValueCount=static_cast<uint32_t>(clears.size());
+    rpBI.pClearValues=clears.data();
+
+    uint32_t wc=static_cast<uint32_t>(m_workerPools.size());
+    uint32_t dc=static_cast<uint32_t>(visible.size());
+    bool useSecondary = (wc>1 && dc>0);
+
+    vkCmdBeginRenderPass(cmd,&rpBI,
+        useSecondary?VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS:VK_SUBPASS_CONTENTS_INLINE);
+
+    if (useSecondary) {
+        uint32_t batchSz=(dc+wc-1)/wc;
+        std::vector<std::future<VkCommandBuffer>> futures;
+        for (uint32_t w=0; w<wc; ++w) {
+            size_t s=w*batchSz, e=std::min<size_t>(s+batchSz,dc);
+            if (s>=dc) break;
+            std::vector<Mesh*> chunk(visible.begin()+s,visible.begin()+e);
+            futures.push_back(m_threadPool->submit([this,chunk=std::move(chunk),fi,w]() mutable {
+                return recordSecondaryBatch(chunk,fi,w);
+            }));
+        }
+        std::vector<VkCommandBuffer> secondaries;
+        uint32_t totalDC=0;
+        for (auto& f : futures) { auto cb=f.get(); if(cb) secondaries.push_back(cb); ++totalDC; }
+        if (!secondaries.empty())
+            vkCmdExecuteCommands(cmd,static_cast<uint32_t>(secondaries.size()),secondaries.data());
+        m_stats.drawCalls=totalDC;
+    } else {
+        VkViewport vp{0,0,(float)ext.width,(float)ext.height,0,1};
+        vkCmdSetViewport(cmd,0,1,&vp);
+        VkRect2D sc{{0,0},ext}; vkCmdSetScissor(cmd,0,1,&sc);
+        vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_geomPipeline);
+        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 m_geomPipeLayout,0,1,&m_frames[fi].frameSet,0,nullptr);
+        uint32_t drawCount=0;
+        for (auto* m : visible) drawMesh(cmd,*m,fi,drawCount);
+        m_stats.drawCalls=drawCount;
+    }
+    vkCmdEndRenderPass(cmd);
+}
+
+void Renderer::recordSSAOPass(VkCommandBuffer cmd, uint32_t fi) {
+    VkExtent2D ext=m_swapchain->extent();
+    VkClearValue clr{}; clr.color={{1,1,1,1}};
+    VkRenderPassBeginInfo rpBI{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rpBI.renderPass=m_ssaoRP; rpBI.framebuffer=m_ssaoFB;
+    rpBI.renderArea.extent=ext; rpBI.clearValueCount=1; rpBI.pClearValues=&clr;
+    vkCmdBeginRenderPass(cmd,&rpBI,VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp{0,0,(float)ext.width,(float)ext.height,0,1};
+    vkCmdSetViewport(cmd,0,1,&vp);
+    VkRect2D sc{{0,0},ext}; vkCmdSetScissor(cmd,0,1,&sc);
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_ssaoPipeline);
+    vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,
+                             m_ssaoPipeLayout,0,1,&m_frames[fi].ssaoSet,0,nullptr);
+    vkCmdDraw(cmd,3,1,0,0);
+    vkCmdEndRenderPass(cmd);
+}
+
+void Renderer::recordSSAOBlurPass(VkCommandBuffer cmd, uint32_t fi) {
+    VkExtent2D ext=m_swapchain->extent();
+    VkClearValue clr{}; clr.color={{1,1,1,1}};
+    VkRenderPassBeginInfo rpBI{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rpBI.renderPass=m_ssaoBlurRP; rpBI.framebuffer=m_ssaoBlurFB;
+    rpBI.renderArea.extent=ext; rpBI.clearValueCount=1; rpBI.pClearValues=&clr;
+    vkCmdBeginRenderPass(cmd,&rpBI,VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp{0,0,(float)ext.width,(float)ext.height,0,1};
+    vkCmdSetViewport(cmd,0,1,&vp);
+    VkRect2D sc{{0,0},ext}; vkCmdSetScissor(cmd,0,1,&sc);
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_ssaoBlurPipeline);
+    vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,
+                             m_ssaoBlurPipeLayout,0,1,&m_frames[fi].ssaoBlurSet,0,nullptr);
+    BlurPC blurPC;
+    blurPC.texelSize={1.f/ext.width, 1.f/ext.height};
+    vkCmdPushConstants(cmd,m_ssaoBlurPipeLayout,VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(BlurPC),&blurPC);
+    vkCmdDraw(cmd,3,1,0,0);
+    vkCmdEndRenderPass(cmd);
+}
+
+void Renderer::recordLightingPass(VkCommandBuffer cmd, uint32_t fi) {
+    VkExtent2D ext=m_swapchain->extent();
+    VkClearValue clr{}; clr.color={{0,0,0,1}};
+    VkRenderPassBeginInfo rpBI{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rpBI.renderPass=m_lightingRP; rpBI.framebuffer=m_lightingFB;
+    rpBI.renderArea.extent=ext; rpBI.clearValueCount=1; rpBI.pClearValues=&clr;
+    vkCmdBeginRenderPass(cmd,&rpBI,VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp{0,0,(float)ext.width,(float)ext.height,0,1};
+    vkCmdSetViewport(cmd,0,1,&vp);
+    VkRect2D sc{{0,0},ext}; vkCmdSetScissor(cmd,0,1,&sc);
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_lightPipeline);
+
+    // Sets 0-2: G-buffer, frame UBO, lights (always present)
+    VkDescriptorSet sets[5] = {
+        m_frames[fi].gbufSet,
+        m_frames[fi].frameSet,
+        m_frames[fi].lightSet,
+        // Sets 3-4: IBL and shadow (may be VK_NULL_HANDLE if systems not ready)
+        (m_iblProbe && m_iblProbe->isReady()) ? m_framesExt[fi].iblSet    : VK_NULL_HANDLE,
+        m_shadowSystem                         ? m_framesExt[fi].shadowSet : VK_NULL_HANDLE,
+    };
+    uint32_t setCount = (sets[3] != VK_NULL_HANDLE && sets[4] != VK_NULL_HANDLE) ? 5 : 3;
+    vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_lightPipeLayout,0,setCount,sets,0,nullptr);
+
+    vkCmdDraw(cmd,3,1,0,0);
+    vkCmdEndRenderPass(cmd);
+}
+
+void Renderer::recordTonemapPass(VkCommandBuffer cmd, uint32_t imageIdx, uint32_t fi) {
+    VkExtent2D ext=m_swapchain->extent();
+    // Swapchain RP has loadOp=CLEAR on both color and depth attachments, so
+    // we must provide 2 clear values even though our fullscreen triangle never
+    // writes depth.
+    VkClearValue clears[2]{};
+    clears[0].color         = {{0,0,0,1}};
+    clears[1].depthStencil  = {1.f, 0};
+    VkRenderPassBeginInfo rpBI{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rpBI.renderPass=m_swapchain->renderPass();
+    rpBI.framebuffer=m_swapchain->framebuffer(imageIdx);
+    rpBI.renderArea.extent=ext; rpBI.clearValueCount=2; rpBI.pClearValues=clears;
+    vkCmdBeginRenderPass(cmd,&rpBI,VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp{0,0,(float)ext.width,(float)ext.height,0,1};
+    vkCmdSetViewport(cmd,0,1,&vp);
+    VkRect2D sc{{0,0},ext}; vkCmdSetScissor(cmd,0,1,&sc);
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_tonemapPipeline);
+    vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,
+                             m_tonemapPipeLayout,0,1,&m_frames[fi].hdrSet,0,nullptr);
+    TonemapPC tmPC{m_settings.exposure, m_settings.tonemapOp};
+    vkCmdPushConstants(cmd,m_tonemapPipeLayout,VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(TonemapPC),&tmPC);
+    vkCmdDraw(cmd,3,1,0,0);
+    vkCmdEndRenderPass(cmd);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Full frame recording
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::recordFrame(VkCommandBuffer cmd, uint32_t imageIdx,
+                            Scene& scene, uint32_t fi)
+{
+    // 0. Shadow cascades — depth-only pass for directional light
+    if (m_shadowSystem) {
+        // Find first directional light from scene; fall back to sun direction
+        glm::vec3 lightDir{0.f, -1.f, -0.5f};
+        for (auto& l : scene.lights()) {
+            if (l->type() == LightType::Directional) {
+                lightDir = glm::vec3(l->toGpuLight().direction);
+                break;
+            }
+        }
+        m_shadowSystem->update(*scene.camera(), lightDir);
+
+        // Upload ShadowUBO for the lighting pass
+        const ShadowUBO& ubo = m_shadowSystem->shadowUBO();
+        std::memcpy(m_framesExt[fi].shadowUBO.mapped, &ubo, sizeof(ShadowUBO));
+
+        m_shadowSystem->renderCascades(cmd, [&](VkCommandBuffer c, uint32_t cascade) {
+            recordShadowDraw(c, cascade, m_visibleScratch, fi);
+        });
+    }
+
+    // 1. Geometry pass
+    recordGeometryPass(cmd, m_visibleScratch, fi);
+
+    // 2. SSAO pass
+    recordSSAOPass(cmd, fi);
+
+    // 3. SSAO blur pass
+    recordSSAOBlurPass(cmd, fi);
+
+    // 4. Lighting pass — reads SSAO blurred (gbufSet binding 6).
+    //    The SSAO render pass already transitions ssaoBlur to SHADER_READ_ONLY.
+    recordLightingPass(cmd, fi);
+
+    // 5. Tonemap to swapchain
+    recordTonemapPass(cmd, imageIdx, fi);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resize
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::handleResize() {
+    auto [w,h] = m_window.getFramebufferSize();
+    while (w==0||h==0) { glfwWaitEvents(); std::tie(w,h)=m_window.getFramebufferSize(); }
+    m_ctx->waitIdle();
+    destroySizeDependentResources();
+    m_swapchain->recreate(w,h);
+    createSizeDependentResources();
+    allocateAndWriteDescriptorSets();  // re-bind recreated images
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// render() — called once per frame by the application
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::render(Scene& scene) {
+    static auto startTime = std::chrono::high_resolution_clock::now();
+    auto now = std::chrono::high_resolution_clock::now();
+    float time = std::chrono::duration<float>(now - startTime).count();
+
+    uint32_t fi = m_currentFrame;
+    auto& frame = m_swapchain->frame(fi);
+
+    // Wait for the previous use of this frame slot to finish.
+    vkWaitForFences(m_ctx->device(),1,&frame.inFlightFence,VK_TRUE,UINT64_MAX);
+
+    // Acquire swapchain image.
+    uint32_t imageIdx;
+    VkResult acquireRes = m_swapchain->acquireNextImage(fi, imageIdx);
+    if (acquireRes == VK_ERROR_OUT_OF_DATE_KHR) { handleResize(); return; }
+    if (acquireRes != VK_SUCCESS && acquireRes != VK_SUBOPTIMAL_KHR)
+        throw std::runtime_error("[VKGFX] Failed to acquire swapchain image");
+
+    vkResetFences(m_ctx->device(),1,&frame.inFlightFence);
+
+    // ── Update per-frame GPU buffers ─────────────────────────────────────────
+
+    // FrameUBO — camera matrices + time
+    if (scene.camera()) {
+        auto ubo = scene.camera()->toFrameUBO(time);
+        std::memcpy(m_frames[fi].frameUBO.mapped, &ubo, sizeof(FrameUBO));
+
+        // SSAOParams — must include current proj/invProj/view + kernel
+        SSAOParams ssaoP{};
+        ssaoP.proj      = ubo.proj;
+        ssaoP.invProj   = ubo.invProj;
+        ssaoP.view      = ubo.view;
+        for (uint32_t i=0; i<32; ++i) ssaoP.samples[i]=m_ssaoKernel[i];
+        VkExtent2D ext=m_swapchain->extent();
+        ssaoP.noiseScale = {static_cast<float>(ext.width)/4.f, static_cast<float>(ext.height)/4.f};
+        ssaoP.radius     = m_settings.ssaoRadius;
+        ssaoP.bias       = m_settings.ssaoBias;
+        std::memcpy(m_frames[fi].ssaoUBO.mapped, &ssaoP, sizeof(SSAOParams));
+    }
+
+    // LightSSBO
+    LightSSBO lightBuf{};
+    scene.buildLightBuffer(lightBuf);
+    std::memcpy(m_frames[fi].lightSSBO.mapped, &lightBuf, sizeof(LightSSBO));
+
+    // ── CPU-side frustum culling (also feeds GPU culling instance list) ──────
+    m_visibleScratch = scene.visibleMeshes(m_threadPool.get());
+    m_stats.culledObjects = static_cast<uint32_t>(scene.meshes().size()) -
+                             static_cast<uint32_t>(m_visibleScratch.size());
+
+    // ── Upload any new meshes ────────────────────────────────────────────────
+    for (auto* mesh : m_visibleScratch)
+        if (!mesh->gpuReady) uploadMeshToGPU(*mesh);
+
+    // ── GPU culling — build instance list and dispatch compute ───────────────
+    if (m_gpuCulling) {
+        std::vector<GpuInstance> instances;
+        instances.reserve(m_visibleScratch.size());
+        for (uint32_t idx = 0; auto* mesh : m_visibleScratch) {
+            GpuInstance gi{};
+            AABB wb       = mesh->worldBounds();
+            gi.model       = mesh->modelMatrix();
+            gi.aabbMin     = glm::vec4(wb.min, 0.f);
+            gi.aabbMax     = glm::vec4(wb.max, 0.f);
+            gi.meshIdx     = idx;
+            gi.materialIdx = 0;
+            instances.push_back(gi);
+            ++idx;
+        }
+        m_gpuCulling->uploadInstances(instances);
+        // Note: actual dispatch (cull()) is called in recordFrame before geometry,
+        // after the command buffer has been opened.
+    }
+
+    // ── Flush deferred deletions (buffers retired > 1 frame ago) ────────────
+    m_deletionQueue.erase(
+        std::remove_if(m_deletionQueue.begin(), m_deletionQueue.end(),
+            [&](DeferredDelete& d) {
+                if (m_frameCounter - d.frameIndex >= MAX_FRAMES_IN_FLIGHT) {
+                    m_ctx->destroyBuffer(d.vertexBuffer);
+                    m_ctx->destroyBuffer(d.indexBuffer);
+                    for (auto& b : d.matUBOs) m_ctx->destroyBuffer(b);
+                    return true;
+                }
+                return false;
+            }),
+        m_deletionQueue.end());
+
+    // ── Record command buffer ────────────────────────────────────────────────
+    VkCommandBuffer cmd = frame.commandBuffer;
+    vkResetCommandBuffer(cmd, 0);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VK_CHECK(vkBeginCommandBuffer(cmd,&bi));
+    recordFrame(cmd, imageIdx, scene, fi);
+    VK_CHECK(vkEndCommandBuffer(cmd));
+
+    // ── Submit ───────────────────────────────────────────────────────────────
+    VkSemaphore waitSem   = m_swapchain->imageAvailableSemaphore(fi);
+    VkSemaphore signalSem = m_swapchain->renderFinishedSemaphore(imageIdx);
+    VkPipelineStageFlags waitMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.waitSemaphoreCount  =1; si.pWaitSemaphores  =&waitSem;   si.pWaitDstStageMask=&waitMask;
+    si.commandBufferCount  =1; si.pCommandBuffers  =&cmd;
+    si.signalSemaphoreCount=1; si.pSignalSemaphores=&signalSem;
+    VK_CHECK(vkQueueSubmit(m_ctx->graphicsQueue(),1,&si,frame.inFlightFence));
+
+    // ── Present ──────────────────────────────────────────────────────────────
+    VkResult presentRes = m_swapchain->present(imageIdx);
+    if (presentRes==VK_ERROR_OUT_OF_DATE_KHR || presentRes==VK_SUBOPTIMAL_KHR ||
+        m_window.wasResized())
+    {
+        m_window.resetResizeFlag();
+        handleResize();
+    } else if (presentRes != VK_SUCCESS) {
+        throw std::runtime_error("[VKGFX] Failed to present");
+    }
+
+    m_currentFrame = (fi + 1) % MAX_FRAMES_IN_FLIGHT;
+    ++m_frameCounter;
+
+    // ── Frame timing stats ───────────────────────────────────────────────────
+    static auto lastFpsTime = std::chrono::high_resolution_clock::now();
+    static uint32_t fpsFrames = 0;
+    ++fpsFrames;
+    auto elapsed = std::chrono::duration<float>(now - lastFpsTime).count();
+    if (elapsed >= 1.f) {
+        m_stats.fps = static_cast<float>(fpsFrames) / elapsed;
+        m_stats.frameTimeMs = 1000.f / m_stats.fps;
+        fpsFrames = 0;
+        lastFpsTime = now;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Render Graph init
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::initRenderGraph() {
+    m_renderGraph = std::make_unique<RenderGraph>(m_ctx);
+
+    auto [w, h] = m_window.getFramebufferSize();
+
+    RGTextureDesc hdrDesc{};
+    hdrDesc.format      = VK_FORMAT_R16G16B16A16_SFLOAT;
+    hdrDesc.widthScale  = 1.f; hdrDesc.heightScale = 1.f;
+    hdrDesc.name        = "HDR";
+    m_rgHDR = m_renderGraph->createTexture(hdrDesc);
+
+    RGTextureDesc ssaoDesc{};
+    ssaoDesc.format      = VK_FORMAT_R8_UNORM;
+    ssaoDesc.widthScale  = 1.f; ssaoDesc.heightScale = 1.f;
+    ssaoDesc.name        = "SSAO_Raw";
+    m_rgSSAO = m_renderGraph->createTexture(ssaoDesc);
+
+    RGTextureDesc ssaoBlurDesc = ssaoDesc;
+    ssaoBlurDesc.name    = "SSAO_Blur";
+    m_rgSSAOBlur = m_renderGraph->createTexture(ssaoBlurDesc);
+
+    m_renderGraph->compile({static_cast<uint32_t>(w), static_cast<uint32_t>(h)});
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IBL init
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::initIBL(const std::filesystem::path& hdrPath) {
+    if (!std::filesystem::exists(hdrPath)) {
+        std::cout << "[VKGFX] IBL: " << hdrPath << " not found — using flat ambient\n";
+        return;
+    }
+    m_iblProbe = std::make_unique<IBLProbe>();
+    m_iblProbe->loadFromEquirectangular(m_ctx, hdrPath);
+
+    // Create descriptor set layouts for IBL (set 3) and shadow (set 4)
+    createIBLDescriptors();
+}
+
+void Renderer::createIBLDescriptors() {
+    if (!m_iblProbe || !m_iblProbe->isReady()) return;
+    auto dev = m_ctx->device();
+
+    // Layout: set 3 — irradianceMap, prefilteredMap, brdfLUT
+    {
+        VkDescriptorSetLayoutBinding bs[] = {
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        };
+        VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        ci.bindingCount = 3; ci.pBindings = bs;
+        VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &m_iblLayout));
+    }
+
+    // Allocate and write one set per frame (same IBL images across all frames)
+    for (auto& fx : m_framesExt) {
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool = m_descPool; ai.descriptorSetCount = 1; ai.pSetLayouts = &m_iblLayout;
+        VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &fx.iblSet));
+
+        auto writeImg = [&](uint32_t bind, VkImageView view, VkSampler samp) {
+            VkDescriptorImageInfo ii{samp, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet   w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstSet=fx.iblSet; w.dstBinding=bind; w.descriptorCount=1;
+            w.descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w.pImageInfo=&ii;
+            vkUpdateDescriptorSets(dev,1,&w,0,nullptr);
+        };
+        writeImg(0, m_iblProbe->irradianceView(),  m_iblProbe->cubeSampler());
+        writeImg(1, m_iblProbe->prefilteredView(), m_iblProbe->cubeSampler());
+        writeImg(2, m_iblProbe->brdfLUTView(),     m_iblProbe->brdfSampler());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shadow system init
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::initShadows() {
+    m_shadowSystem = std::make_unique<ShadowSystem>();
+    m_shadowSystem->init(m_ctx);
+    m_shadowSystem->createPipeline(m_settings.shaderDir, m_frameLayout);
+    createShadowDescriptors();
+}
+
+void Renderer::createShadowDescriptors() {
+    auto dev = m_ctx->device();
+
+    // Layout: set 4 — shadowMap sampler2DArrayShadow + ShadowUBO
+    {
+        VkDescriptorSetLayoutBinding bs[] = {
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        };
+        VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        ci.bindingCount = 2; ci.pBindings = bs;
+        VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &m_shadowLayout));
+    }
+
+    for (auto& fx : m_framesExt) {
+        fx.shadowUBO = m_ctx->createBuffer(sizeof(ShadowUBO),
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VMA_MEMORY_USAGE_AUTO_PREFER_HOST, true);
+
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool = m_descPool; ai.descriptorSetCount = 1; ai.pSetLayouts = &m_shadowLayout;
+        VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &fx.shadowSet));
+
+        // Shadow map array sampler
+        VkDescriptorImageInfo imgInfo{
+            m_shadowSystem->shadowSampler(),
+            m_shadowSystem->shadowArrayView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        VkWriteDescriptorSet w0{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w0.dstSet=fx.shadowSet; w0.dstBinding=0; w0.descriptorCount=1;
+        w0.descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w0.pImageInfo=&imgInfo;
+        vkUpdateDescriptorSets(dev,1,&w0,0,nullptr);
+
+        // ShadowUBO
+        VkDescriptorBufferInfo bufInfo{fx.shadowUBO.buffer, 0, sizeof(ShadowUBO)};
+        VkWriteDescriptorSet w1{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w1.dstSet=fx.shadowSet; w1.dstBinding=1; w1.descriptorCount=1;
+        w1.descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w1.pBufferInfo=&bufInfo;
+        vkUpdateDescriptorSets(dev,1,&w1,0,nullptr);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GPU Culling init
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::initGPUCulling() {
+    m_gpuCulling = std::make_unique<GPUCulling>();
+    m_gpuCulling->init(m_ctx, 65536);
+    // Pipeline requires compiled SPIR-V — compile shaders first with glslc:
+    //   glslc shaders/gpu_cull.comp -o shaders/gpu_cull.comp.spv
+    std::filesystem::path spv = m_settings.shaderDir / "gpu_cull.comp.spv";
+    if (std::filesystem::exists(spv))
+        m_gpuCulling->createPipeline(m_settings.shaderDir);
+    else
+        std::cout << "[VKGFX] GPU culling shader not found at " << spv
+                  << " — falling back to CPU culling\n";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shadow draw callback
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::recordShadowDraw(VkCommandBuffer cmd, uint32_t cascadeIdx,
+                                  const std::vector<Mesh*>& meshes, uint32_t fi)
+{
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowSystem->pipeline());
+
+    // Bind scene set (frameUBO which contains shadow matrices for this cascade)
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                             m_shadowSystem->pipeLayout(), 0, 1,
+                             &m_frames[fi].frameSet, 0, nullptr);
+
+    for (auto* mesh : meshes) {
+        if (!mesh || !mesh->gpuReady) continue;
+
+        struct PushData { glm::mat4 model; uint32_t cascade; } pc;
+        pc.model   = mesh->modelMatrix();
+        pc.cascade = cascadeIdx;
+        vkCmdPushConstants(cmd, m_shadowSystem->pipeLayout(),
+                           VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushData), &pc);
+
+        VkBuffer vb      = mesh->vertexBuffer.buffer;
+        VkDeviceSize off = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &off);
+        vkCmdBindIndexBuffer(cmd, mesh->indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, static_cast<uint32_t>(mesh->indices().size()), 1, 0, 0, 0);
+    }
+}
+
 } // namespace vkgfx
+

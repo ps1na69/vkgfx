@@ -1,0 +1,94 @@
+#version 450
+// gpu_cull.comp — GPU frustum culling.
+//
+// One thread per instance. Tests the instance AABB against 6 frustum planes.
+// Surviving instances write a VkDrawIndexedIndirectCommand to the output buffer.
+
+layout(local_size_x = 64) in;
+
+struct GpuInstance {
+    mat4  model;
+    vec4  aabbMin;   // .xyz = min
+    vec4  aabbMax;   // .xyz = max
+    uint  meshIdx;
+    uint  materialIdx;
+    uint  pad[2];
+};
+
+struct MeshDrawData {
+    uint firstIndex;
+    uint indexCount;
+    int  vertexOffset;
+    uint pad;
+};
+
+struct DrawCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
+layout(set = 0, binding = 0) readonly buffer Instances {
+    GpuInstance instances[];
+};
+layout(set = 0, binding = 1) readonly buffer MeshTable {
+    MeshDrawData meshes[];
+};
+layout(set = 0, binding = 2) buffer IndirectCommands {
+    DrawCommand commands[];
+};
+layout(set = 0, binding = 3) buffer DrawCount {
+    uint count;
+};
+layout(set = 0, binding = 4) uniform FrustumUBO {
+    vec4 planes[6];   // Ax+By+Cz+D, normalised
+} frustum;
+
+layout(push_constant) uniform PC {
+    uint instanceCount;
+};
+
+// Test AABB (world space) against all 6 frustum planes.
+// Returns true if the AABB is fully outside any plane (culled).
+bool isCulled(vec3 bMin, vec3 bMax) {
+    for (int i = 0; i < 6; ++i) {
+        vec3 n  = frustum.planes[i].xyz;
+        float d = frustum.planes[i].w;
+        // Positive vertex: corner of AABB most in the direction of the plane normal
+        vec3 pv = mix(bMin, bMax, greaterThan(n, vec3(0.0)));
+        if (dot(n, pv) + d < 0.0)
+            return true;  // AABB is fully on the negative side — cull
+    }
+    return false;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= instanceCount) return;
+
+    GpuInstance inst = instances[idx];
+
+    // Transform AABB to world space (8-corner method)
+    vec3 bMin = vec3(1e30), bMax = vec3(-1e30);
+    for (int x = 0; x < 2; ++x)
+    for (int y = 0; y < 2; ++y)
+    for (int z = 0; z < 2; ++z) {
+        vec3 corner = mix(inst.aabbMin.xyz, inst.aabbMax.xyz, vec3(x, y, z));
+        vec4 wc     = inst.model * vec4(corner, 1.0);
+        bMin = min(bMin, wc.xyz);
+        bMax = max(bMax, wc.xyz);
+    }
+
+    if (isCulled(bMin, bMax)) return;
+
+    // Append draw command atomically
+    uint slot = atomicAdd(count, 1);
+    MeshDrawData mesh  = meshes[inst.meshIdx];
+    commands[slot].indexCount    = mesh.indexCount;
+    commands[slot].instanceCount = 1;
+    commands[slot].firstIndex    = mesh.firstIndex;
+    commands[slot].vertexOffset  = mesh.vertexOffset;
+    commands[slot].firstInstance = idx;  // carries instance index for VS to read model matrix
+}

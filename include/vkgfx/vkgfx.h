@@ -7,8 +7,8 @@
  *   ╚████╔╝ ██║  ██╗╚██████╔╝██║     ██╔╝ ██╗
  *    ╚═══╝  ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝  ╚═╝
  *
- *  VKGFX — A high-performance Vulkan 3D Graphics Library
- *  C++20 | Vulkan 1.3 | GLFW | GLM | stb_image | tinyobjloader
+ *  VKGFX — High-performance Vulkan deferred renderer
+ *  C++20 | Vulkan 1.3 | GLFW | GLM | tinygltf | KTX2
  */
 
 #include "types.h"
@@ -20,5 +20,4 @@
 #include "mesh.h"
 #include "camera.h"
 #include "scene.h"
-#include "postprocess.h"
 #include "renderer.h"

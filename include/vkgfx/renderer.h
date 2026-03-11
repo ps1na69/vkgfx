@@ -1,55 +1,55 @@
 #pragma once
+// renderer.h — Deferred shading renderer.
+//
+// This is the only renderer in the engine. Forward rendering has been removed.
+//
+// Pipeline (via RenderGraph):
+//   0. Shadow Pass    — CSM depth-only pass (4 cascades)
+//   1. Geometry Pass  — fills G-buffer (position, normal, albedo, material, emissive)
+//   2. SSAO Pass      — hemisphere ambient occlusion in view space
+//   3. SSAO Blur      — depth-aware 4x4 box blur
+//   4. Lighting Pass  — Cook-Torrance PBR + IBL + CSM shadows → HDR
+//   5. Tonemap Pass   — ACES filmic, gamma correction, writes to swapchain
+//
+// GPU culling is dispatched before geometry: a compute shader writes
+// VkDrawIndexedIndirectCommand for only the visible instances, and the
+// geometry pass uses vkCmdDrawIndexedIndirectCount.
+
 #include "window.h"
 #include "swapchain.h"
 #include "scene.h"
-#include "postprocess.h"
+#include "GBuffer.h"
 #include "thread_pool.h"
+#include "render_graph.h"
+#include "ibl.h"
+#include "shadow.h"
+#include "gpu_culling.h"
 #include <filesystem>
-#include <vector>
 
 namespace vkgfx {
 
 struct RendererSettings {
-    MSAASamples  msaa           = MSAASamples::x4;
-    Vec4         clearColor     = {0.05f, 0.05f, 0.07f, 1.f};
+    Vec4         clearColor     = {0.f, 0.f, 0.f, 1.f};
     bool         vsync          = true;
-    bool         wireframe      = false;
+    bool         wireframe      = false;  // geometry pass polygon mode
     bool         frustumCulling = true;
     bool         validation     = true;
+    float        ssaoRadius     = 0.5f;
+    float        ssaoBias       = 0.025f;
+    float        exposure       = 0.f;   // EV offset for tonemap
+    uint32_t     tonemapOp      = 0;     // 0=ACES, 1=Reinhard, 2=Uncharted2
+    uint32_t     workerThreads  = 0;     // 0 = auto-detect
     std::filesystem::path shaderDir = "shaders";
-    uint32_t     workerThreads  = 0;  // 0 = auto-detect
 };
 
-struct PipelineEntry {
-    VkPipeline            pipeline       = VK_NULL_HANDLE;
-    VkPipelineLayout      layout         = VK_NULL_HANDLE;
-    VkDescriptorSetLayout matSetLayout   = VK_NULL_HANDLE;
-    VkDescriptorSetLayout globalSetLayout= VK_NULL_HANDLE;
-};
-
+// GPU data tracked per Mesh.
 struct MeshGPUData {
-    AllocatedBuffer vertexBuffer;
-    AllocatedBuffer indexBuffer;
-    std::array<AllocatedBuffer, MAX_FRAMES_IN_FLIGHT> matBuffers;
-    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> matDescSets;
+    // Material descriptor sets (one per frame-in-flight).
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> matDescSets{};
+    // Per-frame MaterialUBO buffers (persistent-mapped HOST_COHERENT).
+    std::array<AllocatedBuffer, MAX_FRAMES_IN_FLIGHT> matUBOs{};
     bool     initialized   = false;
-    uint32_t writtenFrames = 0;
-};
-
-// ── Draw key: used to sort draw calls by pipeline to minimise state changes ──
-struct DrawKey {
-    uint64_t pipelineHash = 0;
-    uint32_t meshId       = 0;   // tie-break to group same-mesh submeshes
-    bool operator<(const DrawKey& o) const {
-        if (pipelineHash != o.pipelineHash) return pipelineHash < o.pipelineHash;
-        return meshId < o.meshId;
-    }
-};
-
-struct DrawCall {
-    DrawKey  key;
-    Mesh*    mesh     = nullptr;
-    uint32_t subIndex = 0;  // index into mesh->subMeshes()
+    uint32_t writtenFrames = 0;  // bitmask — which frames have received a descriptor write
 };
 
 class Renderer {
@@ -60,185 +60,210 @@ public:
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
 
+    // Render one frame: geometry → SSAO → lighting → tonemap.
     void render(Scene& scene);
     void shutdown(Scene* scene = nullptr);
 
-    void setWireframe(bool v)  { m_settings.wireframe = v; }
-    void setClearColor(Vec4 c) { m_settings.clearColor = c; }
-
-    void setPostProcess(const PostProcessSettings& pp);
-    [[nodiscard]] const PostProcessSettings& postProcess() const { return m_ppSettings; }
+    void setWireframe(bool v) { m_settings.wireframe = v; }
+    void setExposure(float ev){ m_settings.exposure  = ev; }
 
     struct Stats {
-        uint32_t drawCalls      = 0;
-        uint32_t culledObjects  = 0;
-        uint32_t totalVertices  = 0;
-        float    frameTimeMs    = 0.f;
-        float    fps            = 0.f;
-        uint32_t workerThreads  = 0;
+        uint32_t drawCalls     = 0;
+        uint32_t culledObjects = 0;
+        float    frameTimeMs   = 0.f;
+        float    fps           = 0.f;
     };
     [[nodiscard]] const Stats& stats() const { return m_stats; }
-    [[nodiscard]] const Context& context() const { return *m_ctx; }
     [[nodiscard]] std::shared_ptr<const Context> contextPtr() const { return m_ctx; }
 
 private:
-    // ── Descriptor helpers ─────────────────────────────────────────────────────
+    // ── Initialisation ─────────────────────────────────────────────────────────
     void createDescriptorPool();
-    void createGlobalDescriptorSetLayout();
-    void createGlobalDescriptorSets();
-    void updateGlobalDescriptors(uint32_t frameIdx);
+    void createDescriptorLayouts();
 
-    // ── Pipeline management ────────────────────────────────────────────────────
-    PipelineEntry& getOrCreatePipeline(std::string_view shaderName,
-                                        const PipelineSettings& ps,
-                                        VkDescriptorSetLayout matLayout);
-    PipelineEntry  createPipeline(std::string_view shaderName,
-                                   const PipelineSettings& ps,
-                                   VkDescriptorSetLayout matLayout);
+    void createGeometryRenderPass();
+    void createSSAORenderPass();
+    void createSSAOBlurRenderPass();
+    void createLightingRenderPass();
+
+    void createGeometryPipeline();
+    void createSSAOPipeline();
+    void createSSAOBlurPipeline();
+    void createLightingPipeline();
+    void createTonemapPipeline();
+
+    void createSizeDependentResources();
+    void destroySizeDependentResources();
+
+    void createPerFrameBuffers();
+    void createSSAOKernel();
+    void allocateAndWriteDescriptorSets();
+
     VkShaderModule createShaderModule(const std::filesystem::path& path);
-    void destroyPipelines();
 
-    VkDescriptorSetLayout getOrCreateMatDescLayout(std::string_view shaderName,
-                                                    uint32_t texCount);
-    MeshGPUData& getOrCreateMeshData(Mesh* mesh, Material* mat);
-    void updateMaterialDescriptors(MeshGPUData& data, Material* mat, uint32_t frameIdx);
+    // ── Per-frame mesh data ────────────────────────────────────────────────────
+    MeshGPUData& getOrCreateMeshData(Mesh* mesh);
+    void updateMaterialDescriptors(MeshGPUData& data, PBRMaterial* mat, uint32_t fi);
     void uploadMeshToGPU(Mesh& mesh);
-    // NOTE: freeMeshGPUData() removed — use the deferred deletion queue instead.
-    //       Destroying buffers immediately (without waiting for in-flight frames)
-    //       is a GPU use-after-free. The deletion queue is the correct mechanism.
 
     // ── Frame recording ────────────────────────────────────────────────────────
-    void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIdx,
-                              Scene& scene, uint32_t frameIdx);
+    void recordFrame(VkCommandBuffer cmd, uint32_t imageIdx,
+                     Scene& scene, uint32_t fi);
 
-    // Fill a sorted draw-call list from visible meshes into an existing vector
-    // (caller passes m_drawListScratch to avoid per-frame allocation).
-    void buildDrawList(const std::vector<Mesh*>& meshes,
-                       uint32_t frameIdx,
-                       std::vector<DrawCall>& out);
-
-    // Record a batch of draw calls using a secondary command buffer (worker-thread safe)
-    VkCommandBuffer recordSecondaryBatch(const std::vector<DrawCall>& batch,
-                                          uint32_t frameIdx, uint32_t workerIdx);
-
-    void drawMeshSubMesh(VkCommandBuffer cmd, Mesh& mesh, uint32_t subIdx,
-                         uint32_t frameIdx, uint32_t& drawCalls);
-
-    // ── Per-worker secondary command pool ─────────────────────────────────────
-    void createWorkerCommandPools(uint32_t workerCount);
-    void destroyWorkerCommandPools();
+    void recordGeometryPass(VkCommandBuffer cmd, const std::vector<Mesh*>& visible, uint32_t fi);
+    void recordSSAOPass     (VkCommandBuffer cmd, uint32_t fi);
+    void recordSSAOBlurPass (VkCommandBuffer cmd, uint32_t fi);
+    void recordLightingPass (VkCommandBuffer cmd, uint32_t fi);
+    void recordTonemapPass  (VkCommandBuffer cmd, uint32_t imageIdx, uint32_t fi);
 
     void handleResize();
 
-    // ── Shadow ────────────────────────────────────────────────────────────────
-    struct ShadowResources {
-        AllocatedImage   depthArray;
-        VkImageView      arrayView = VK_NULL_HANDLE;
-        VkImageView      layerViews[MAX_SHADOW_MAPS] = {};
-        VkFramebuffer    framebuffers[MAX_SHADOW_MAPS] = {};
-        VkSampler        sampler          = VK_NULL_HANDLE;
-        VkRenderPass     renderPass       = VK_NULL_HANDLE;
-        VkPipeline       pipeline         = VK_NULL_HANDLE;
-        VkPipelineLayout pipelineLayout   = VK_NULL_HANDLE;
-        std::array<AllocatedBuffer, MAX_FRAMES_IN_FLIGHT> ubos;
-        const Light*     casters[MAX_SHADOW_MAPS] = {};
-        Mat4             lightSpaces[MAX_SHADOW_MAPS];
-        Frustum          frustums[MAX_SHADOW_MAPS];
-        int              count = 0;
-    };
-
-    void createShadowResources();
-    void destroyShadowResources();
-    void updateShadowData(Scene& scene, uint32_t frameIdx);
-    void recordShadowPass(VkCommandBuffer cmd, Scene& scene);
-    SceneUBO buildSceneUBOWithShadows(Scene& scene) const;
-
-    // ── Post-process ──────────────────────────────────────────────────────────
-    void initPostProcess();
-    void shutdownPostProcess();
-    void createOffscreenResources();
-    void destroyOffscreenResources();
-    void createPPRenderPass();
-    void destroyPPRenderPass();
-    void createPPFramebuffers();
-    void destroyPPFramebuffers();
-    void createPPDescriptorLayoutAndSets();
-    void destroyPPDescriptorResources();
-    void createPPPipeline();
-    void destroyPPPipeline();
-    void updatePPDescriptors(uint32_t frameIdx);
-    void recordPPPass(VkCommandBuffer cmd, uint32_t imageIdx, uint32_t frameIdx);
-
-    // ── Members ───────────────────────────────────────────────────────────────
+    // ── Core engine objects ────────────────────────────────────────────────────
     Window&                  m_window;
     RendererSettings         m_settings;
     std::shared_ptr<Context> m_ctx;
     VkSurfaceKHR             m_surface = VK_NULL_HANDLE;
     std::unique_ptr<Swapchain> m_swapchain;
 
-    VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_globalSetLayout = VK_NULL_HANDLE;
-    std::array<VkDescriptorSet,    MAX_FRAMES_IN_FLIGHT> m_globalSets{};
-    std::array<AllocatedBuffer,    MAX_FRAMES_IN_FLIGHT> m_cameraUBOs{};
-    std::array<AllocatedBuffer,    MAX_FRAMES_IN_FLIGHT> m_sceneUBOs{};
+    VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
 
-    std::unordered_map<std::string, PipelineEntry>           m_pipelineCache;
-    std::unordered_map<std::string, VkDescriptorSetLayout>   m_matDescLayouts;
-    VkPipelineCache m_pipelineCache_vk = VK_NULL_HANDLE;
+    // ── Descriptor pool + layouts ──────────────────────────────────────────────
+    VkDescriptorPool      m_descPool        = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_frameLayout     = VK_NULL_HANDLE;  // set 0: FrameUBO
+    VkDescriptorSetLayout m_matLayout       = VK_NULL_HANDLE;  // set 1: 5 textures + MaterialUBO
+    VkDescriptorSetLayout m_gbufLayout      = VK_NULL_HANDLE;  // 7 samplers (G-buf + SSAO)
+    VkDescriptorSetLayout m_ssaoLayout      = VK_NULL_HANDLE;  // 3 samplers + SSAOParams UBO
+    VkDescriptorSetLayout m_ssaoBlurLayout  = VK_NULL_HANDLE;  // 2 samplers
+    VkDescriptorSetLayout m_lightLayout     = VK_NULL_HANDLE;  // light SSBO
+    VkDescriptorSetLayout m_hdrLayout       = VK_NULL_HANDLE;  // HDR sampler
 
-    std::unordered_map<Mesh*, MeshGPUData> m_meshData;
-    std::shared_ptr<Texture> m_whiteTexture;
+    // ── G-buffer ───────────────────────────────────────────────────────────────
+    GBuffer m_gbuffer;
 
-    // ── Deferred deletion queue ───────────────────────────────────────────────
-    struct DeferredBuffers {
-        uint64_t            frameIndex;
-        AllocatedBuffer     vertexBuffer;
-        AllocatedBuffer     indexBuffer;
-        std::array<AllocatedBuffer, MAX_FRAMES_IN_FLIGHT> matBuffers;
+    // ── Intermediate images ────────────────────────────────────────────────────
+    AllocatedImage m_ssaoRaw;     // R8_UNORM — raw SSAO
+    AllocatedImage m_ssaoBlur;    // R8_UNORM — blurred SSAO
+    AllocatedImage m_hdrImage;    // RGBA16_SFLOAT — HDR lighting output
+    VkSampler      m_screenSampler = VK_NULL_HANDLE;  // nearest clamp, shared by screen passes
+
+    // ── Render passes ──────────────────────────────────────────────────────────
+    VkRenderPass m_geomRP      = VK_NULL_HANDLE;
+    VkRenderPass m_ssaoRP      = VK_NULL_HANDLE;
+    VkRenderPass m_ssaoBlurRP  = VK_NULL_HANDLE;
+    VkRenderPass m_lightingRP  = VK_NULL_HANDLE;
+
+    // ── Framebuffers (size-dependent) ─────────────────────────────────────────
+    VkFramebuffer m_geomFB      = VK_NULL_HANDLE;
+    VkFramebuffer m_ssaoFB      = VK_NULL_HANDLE;
+    VkFramebuffer m_ssaoBlurFB  = VK_NULL_HANDLE;
+    VkFramebuffer m_lightingFB  = VK_NULL_HANDLE;
+
+    // ── Pipelines ──────────────────────────────────────────────────────────────
+    VkPipeline       m_geomPipeline      = VK_NULL_HANDLE;
+    VkPipelineLayout m_geomPipeLayout    = VK_NULL_HANDLE;
+    VkPipeline       m_ssaoPipeline      = VK_NULL_HANDLE;
+    VkPipelineLayout m_ssaoPipeLayout    = VK_NULL_HANDLE;
+    VkPipeline       m_ssaoBlurPipeline  = VK_NULL_HANDLE;
+    VkPipelineLayout m_ssaoBlurPipeLayout= VK_NULL_HANDLE;
+    VkPipeline       m_lightPipeline     = VK_NULL_HANDLE;
+    VkPipelineLayout m_lightPipeLayout   = VK_NULL_HANDLE;
+    VkPipeline       m_tonemapPipeline   = VK_NULL_HANDLE;
+    VkPipelineLayout m_tonemapPipeLayout = VK_NULL_HANDLE;
+
+    // ── Per-frame GPU resources ────────────────────────────────────────────────
+    struct PerFrame {
+        // Camera / frame data — always updated at start of frame.
+        AllocatedBuffer frameUBO;   // FrameUBO (persistent-mapped)
+        // Lights — filled from Scene::buildLightBuffer each frame.
+        AllocatedBuffer lightSSBO;  // LightSSBO (persistent-mapped)
+        // SSAO parameters — updated every frame with current proj matrices.
+        AllocatedBuffer ssaoUBO;    // SSAOParams (persistent-mapped)
+
+        // Descriptor sets — allocated once, images updated on resize.
+        VkDescriptorSet frameSet    = VK_NULL_HANDLE;  // FrameUBO
+        VkDescriptorSet gbufSet     = VK_NULL_HANDLE;  // G-buffer + SSAO
+        VkDescriptorSet ssaoSet     = VK_NULL_HANDLE;  // SSAO input
+        VkDescriptorSet ssaoBlurSet = VK_NULL_HANDLE;  // blur input
+        VkDescriptorSet lightSet    = VK_NULL_HANDLE;  // Light SSBO
+        VkDescriptorSet hdrSet      = VK_NULL_HANDLE;  // HDR → tonemap
     };
-    std::vector<DeferredBuffers> m_deletionQueue;
+    std::array<PerFrame, MAX_FRAMES_IN_FLIGHT> m_frames;
+
+    // SSAO kernel: 32 hemisphere samples in view space.
+    std::array<Vec4, 32> m_ssaoKernel;
+    // 4x4 tiled rotation noise texture.
+    AllocatedImage m_ssaoNoise;
+    VkSampler      m_ssaoNoiseSampler = VK_NULL_HANDLE;
+
+    // Default 1x1 white texture (fallback for absent material slots).
+    std::shared_ptr<Texture> m_whiteTexture;
+    // Default flat-normal texture (0.5, 0.5, 1.0, 1.0 in UNORM space).
+    std::shared_ptr<Texture> m_flatNormalTexture;
+
+    // ── Per-mesh GPU data ──────────────────────────────────────────────────────
+    std::unordered_map<Mesh*, MeshGPUData> m_meshData;
+    std::mutex                             m_meshDataMutex; // guards getOrCreateMeshData
+
+    // Deferred deletion queue — buffers freed after GPU is done with them.
+    struct DeferredDelete {
+        uint64_t        frameIndex;
+        AllocatedBuffer vertexBuffer;
+        AllocatedBuffer indexBuffer;
+        std::array<AllocatedBuffer, MAX_FRAMES_IN_FLIGHT> matUBOs;
+    };
+    std::vector<DeferredDelete> m_deletionQueue;
     uint64_t m_frameCounter = 0;
 
-    // ── Multithreaded recording ────────────────────────────────────────────────
-    std::unique_ptr<ThreadPool>   m_threadPool;
-    std::vector<std::array<VkCommandPool,   MAX_FRAMES_IN_FLIGHT>> m_workerCmdPools;
-    std::vector<std::array<VkCommandBuffer, MAX_FRAMES_IN_FLIGHT>> m_workerCmdBuffers;
-    // NOTE: m_pipelineMutex removed — all pipeline/layout creation is pre-warmed
-    // on the main thread before workers start, so no lock is ever needed.
-
-    // ── Render pass tracking ──────────────────────────────────────────────────
-    VkRenderPass  m_sceneRenderPass  = VK_NULL_HANDLE;
-
-    // ── Offscreen resources ───────────────────────────────────────────────────
-    AllocatedImage m_offscreenColor;
-    AllocatedImage m_offscreenDepth;
-    VkRenderPass   m_offscreenRenderPass = VK_NULL_HANDLE;
-    VkFramebuffer  m_offscreenFramebuffer = VK_NULL_HANDLE;
-    VkSampler      m_offscreenSampler = VK_NULL_HANDLE;
-
-    // ── PP pass ───────────────────────────────────────────────────────────────
-    VkRenderPass                 m_ppRenderPass  = VK_NULL_HANDLE;
-    std::vector<VkFramebuffer>   m_ppFramebuffers;
-    VkDescriptorSetLayout        m_ppDescSetLayout = VK_NULL_HANDLE;
-    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_ppDescSets{};
-    std::array<AllocatedBuffer,  MAX_FRAMES_IN_FLIGHT> m_ppUBOs{};
-    VkPipeline       m_ppPipeline       = VK_NULL_HANDLE;
-    VkPipelineLayout m_ppPipelineLayout = VK_NULL_HANDLE;
-    // Tracks which frame slots have had their PP image descriptor written at
-    // least once. The image view never changes, so we skip redundant writes.
-    uint32_t m_ppDescWrittenFrames = 0;
-
-    ShadowResources     m_shadow;
-    PostProcessSettings m_ppSettings;
-    bool                m_ppActive = false;
+    // Multithreaded draw recording.
+    std::unique_ptr<ThreadPool> m_threadPool;
+    std::vector<std::array<VkCommandPool,   MAX_FRAMES_IN_FLIGHT>> m_workerPools;
+    std::vector<std::array<VkCommandBuffer, MAX_FRAMES_IN_FLIGHT>> m_workerCmds;
+    void createWorkerPools(uint32_t count);
+    void destroyWorkerPools();
+    VkCommandBuffer recordSecondaryBatch(const std::vector<Mesh*>& batch,
+                                          uint32_t fi, uint32_t workerIdx);
+    void drawMesh(VkCommandBuffer cmd, Mesh& mesh, uint32_t fi, uint32_t& dc);
 
     uint32_t m_currentFrame = 0;
     Stats    m_stats;
 
-    // Reusable scratch buffers — pre-allocated once and reused every frame to
-    // avoid per-frame heap allocations from visibleMeshes() / buildDrawList().
-    std::vector<Mesh*>     m_visibleScratch;
-    std::vector<DrawCall>  m_drawListScratch;
+    // Scratch buffers reused every frame to avoid heap allocations.
+    std::vector<Mesh*> m_visibleScratch;
+
+    // ── New systems ────────────────────────────────────────────────────────────
+    std::unique_ptr<RenderGraph>  m_renderGraph;
+    std::unique_ptr<IBLProbe>     m_iblProbe;
+    std::unique_ptr<ShadowSystem> m_shadowSystem;
+    std::unique_ptr<GPUCulling>   m_gpuCulling;
+
+    // Descriptor set layouts for new lighting pass bindings (sets 3 & 4)
+    VkDescriptorSetLayout m_iblLayout    = VK_NULL_HANDLE; // set 3: irr+pf+brdfLUT
+    VkDescriptorSetLayout m_shadowLayout = VK_NULL_HANDLE; // set 4: shadowArray + shadowUBO
+
+    // Per-frame IBL / shadow descriptor sets
+    struct PerFrameExt {
+        VkDescriptorSet iblSet    = VK_NULL_HANDLE;
+        VkDescriptorSet shadowSet = VK_NULL_HANDLE;
+        AllocatedBuffer shadowUBO;  // ShadowUBO (persistent-mapped)
+    };
+    std::array<PerFrameExt, MAX_FRAMES_IN_FLIGHT> m_framesExt;
+
+    // Render-graph texture handles (populated in createSizeDependentResources)
+    RGTextureHandle m_rgHDR      = RG_NULL_HANDLE;
+    RGTextureHandle m_rgSSAO     = RG_NULL_HANDLE;
+    RGTextureHandle m_rgSSAOBlur = RG_NULL_HANDLE;
+
+    // Init helpers for new systems
+    void initRenderGraph();
+    void initIBL(const std::filesystem::path& hdrPath = "assets/sky.hdr");
+    void initShadows();
+    void initGPUCulling();
+    void createIBLDescriptors();
+    void createShadowDescriptors();
+
+    // Shadow geometry draw callback
+    void recordShadowDraw(VkCommandBuffer cmd, uint32_t cascadeIdx,
+                          const std::vector<Mesh*>& meshes, uint32_t fi);
 };
 
 } // namespace vkgfx
