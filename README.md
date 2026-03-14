@@ -10,7 +10,7 @@ A clean C++20 Vulkan rendering library designed for ergonomic use, inspired by
 | Feature | Details |
 |---|---|
 | **API** | C++20, RAII, fluent builder syntax |
-| **Rendering** | Forward renderer, PBR + Phong materials |
+| **Rendering** | Deffered renderer, PBR + Phong materials |
 | **BRDF** | Cook-Torrance (GGX NDF, Smith-G, Schlick-F) |
 | **Lighting** | Point, Directional, Spot (up to 8 dynamic) |
 | **MSAA** | x1 / x2 / x4 / x8  (auto-clamped to device max) |
