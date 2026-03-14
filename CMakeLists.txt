@@ -103,10 +103,22 @@ target_compile_definitions(vkgfx PUBLIC
 if(MSVC)
     target_compile_options(vkgfx PUBLIC
         /W3
-        /wd4201
-        /wd4100
+        /wd4201   # nameless struct/union
+        /wd4100   # unreferenced formal parameter
         /utf-8
         /MP
+    )
+    # MSVC debug STL's _Is_pointer_address_convertible constexpr check fires on
+    # non-trivially-copyable types (Vulkan opaque handles, std::function, Mesh …).
+    # Disabling iterator debugging (_IDL=0) eliminates all those false-positive
+    # Clangd errors while keeping full debug info and address sanitiser support.
+    target_compile_definitions(vkgfx PUBLIC
+        # Disable MSVC debug iterator checking globally — it triggers a chain of
+        # constexpr errors in _Is_pointer_address_convertible for non-trivially-
+        # copyable types (Vulkan handles, std::function, etc.) that confuses both
+        # the compiler in some edge cases and clangd's IntelliSense permanently.
+        _ITERATOR_DEBUG_LEVEL=0
+        _HAS_ITERATOR_DEBUGGING=0
     )
 else()
     target_compile_options(vkgfx PUBLIC -Wall -Wextra -Wno-unused-parameter)
@@ -178,5 +190,15 @@ if(GLSLC)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${SHADER_BIN_DIR} $<TARGET_FILE_DIR:vkgfx_example>/shaders
         COMMENT "Copying shaders to output directory"
+    )
+endif()
+
+# Copy assets (sky.hdr, textures, etc.) to the output directory so the executable
+# can find them with relative paths regardless of the IDE working directory.
+if(EXISTS ${CMAKE_SOURCE_DIR}/assets)
+    add_custom_command(TARGET vkgfx_example POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:vkgfx_example>/assets
+        COMMENT "Copying assets to output directory"
     )
 endif()

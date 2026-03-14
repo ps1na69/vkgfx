@@ -398,6 +398,9 @@ AllocatedImage Context::createImage(uint32_t w, uint32_t h, uint32_t mipLevels,
 
     VkImageCreateInfo ici{};
     ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    // Cube maps require VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT.
+    // Conventionally a 6-layer 2D image is a cubemap, so set the flag automatically.
+    ici.flags         = (arrayLayers == 6) ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0u;
     ici.imageType     = VK_IMAGE_TYPE_2D;
     ici.extent        = { w, h, 1 };
     ici.mipLevels     = mipLevels;

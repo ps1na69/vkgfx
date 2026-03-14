@@ -16,16 +16,15 @@ namespace vkgfx {
 inline constexpr uint32_t NUM_CASCADES   = 4;
 inline constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
-// GPU-side cascade info (one entry per cascade).
-struct alignas(16) CascadeData {
-    glm::mat4 lightSpaceMatrix;   // view × ortho projection for this cascade
-    float     splitDepth;         // view-space split distance (negative, NDC z)
-    float     pad[3];
-};
-
 // Full shadow UBO — uploaded once per frame.
+// Layout MUST match the GLSL ShadowUBO in both shadow_depth.vert and lighting.frag:
+//   mat4  lightSpaceMatrix[4];   // all 4 cascade light-space matrices (256 bytes)
+//   float splitDepths[4];        // view-space split depths for cascade selection (16 bytes)
 struct alignas(16) ShadowUBO {
-    CascadeData cascades[NUM_CASCADES];
+    glm::mat4 lightSpaceMatrix[NUM_CASCADES];  // 4 × 64 = 256 bytes
+    float     splitDepths[NUM_CASCADES];        // 4 × 4  =  16 bytes
+    // Total: 272 bytes — matches the GLSL std140 layout in lighting.frag exactly.
+    // No padding needed: splitDepths[4] already ends on a 16-byte boundary.
 };
 
 // Per-cascade depth attachment.
@@ -62,6 +61,7 @@ public:
     // Accessors for the lighting pass.
     [[nodiscard]] VkImageView  shadowArrayView() const { return m_shadowArrayView; }
     [[nodiscard]] VkSampler    shadowSampler()   const { return m_shadowSampler; }
+    [[nodiscard]] VkImage      shadowArrayImage() const { return m_shadowArray.image; }
     [[nodiscard]] const ShadowUBO& shadowUBO()   const { return m_ubo; }
     [[nodiscard]] VkPipeline   pipeline()        const { return m_pipeline; }
     [[nodiscard]] VkPipelineLayout pipeLayout()  const { return m_pipeLayout; }

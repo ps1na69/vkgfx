@@ -63,10 +63,15 @@ Renderer::Renderer(Window& window, const RendererSettings& settings)
     createTonemapPipeline();
 
     // ── New systems ─────────────────────────────────────────────────────────
+    std::cout << "[VKGFX] init: render graph..." << std::flush;
     initRenderGraph();
+    std::cout << " OK\n[VKGFX] init: shadows..." << std::flush;
     initShadows();
+    std::cout << " OK\n[VKGFX] init: GPU culling..." << std::flush;
     initGPUCulling();
-    initIBL();  // tries assets/sky.hdr; no-ops gracefully if missing
+    std::cout << " OK\n[VKGFX] init: IBL..." << std::flush;
+    //initIBL();  // tries assets/sky.hdr; no-ops gracefully if missing
+    std::cout << " OK" << std::endl;
 
     uint32_t wc = settings.workerThreads == 0
                 ? std::max(1u, std::thread::hardware_concurrency() - 1u)
@@ -85,6 +90,7 @@ Renderer::~Renderer() { shutdown(); }
 
 void Renderer::shutdown(Scene* scene) {
     if (!m_ctx) return;
+
     m_ctx->waitIdle();
 
     for (auto& d : m_deletionQueue) {
@@ -143,6 +149,11 @@ void Renderer::shutdown(Scene* scene) {
     m_shadowSystem.reset();
     m_iblProbe.reset();
     m_renderGraph.reset();
+
+    // Fallback IBL resources
+    if (m_fallbackCubeView)    { vkDestroyImageView(dev, m_fallbackCubeView, nullptr);    m_fallbackCubeView = VK_NULL_HANDLE; }
+    if (m_fallbackCubeSampler) { vkDestroySampler  (dev, m_fallbackCubeSampler, nullptr); m_fallbackCubeSampler = VK_NULL_HANDLE; }
+    if (m_fallbackCubemap.image) m_ctx->destroyImage(m_fallbackCubemap);
 
     for (auto& fx : m_framesExt)
         m_ctx->destroyBuffer(fx.shadowUBO);
@@ -211,6 +222,18 @@ void Renderer::createDescriptorLayouts() {
     m_ssaoBlurLayout = make({ B{0,CIS,1,FS,nullptr}, B{1,CIS,1,FS,nullptr} });
     m_lightLayout    = make({ B{0,SSBO,1,FS,nullptr} });
     m_hdrLayout      = make({ B{0,CIS,1,FS,nullptr} });
+
+    // IBL and shadow layouts created here (before pipeline creation) so
+    // createLightingPipeline can include all 5 set layouts.
+    m_iblLayout = make({
+        B{0,CIS,1,FS,nullptr},   // irradianceMap
+        B{1,CIS,1,FS,nullptr},   // prefilteredMap
+        B{2,CIS,1,FS,nullptr},   // brdfLUT
+    });
+    m_shadowLayout = make({
+        B{0,CIS,1,FS,nullptr},   // sampler2DArrayShadow
+        B{1,UBO,1,FS,nullptr},   // ShadowUBO
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -486,7 +509,11 @@ void Renderer::allocateAndWriteDescriptorSets() {
 
         wSSBO(f.lightSet, 0, f.lightSSBO.buffer, sizeof(LightSSBO));
         wImg(f.hdrSet,    0, m_hdrImage.view,    m_screenSampler);
+
     }
+
+    // Fallback IBL sets (1×1 black cubemaps) used until a real HDR probe is loaded.
+    createFallbackIBLDescriptors();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -544,6 +571,120 @@ static VkPipeline buildScreenPipeline(VkDevice dev, VkPipelineCache cache,
     VkPipeline pipe;
     VK_CHECK(vkCreateGraphicsPipelines(dev,cache,1,&pci,nullptr,&pipe));
     return pipe;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fallback IBL descriptors — 1×1 black cubemaps so set 3 is always bound.
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::createFallbackIBLDescriptors() {
+    auto dev = m_ctx->device();
+
+    // Destroy previous resources (called again on resize)
+    if (m_fallbackCubeView)    { vkDestroyImageView(dev, m_fallbackCubeView, nullptr);   m_fallbackCubeView = VK_NULL_HANDLE; }
+    if (m_fallbackCubeSampler) { vkDestroySampler  (dev, m_fallbackCubeSampler, nullptr); m_fallbackCubeSampler = VK_NULL_HANDLE; }
+    if (m_fallbackCubemap.image) m_ctx->destroyImage(m_fallbackCubemap);
+
+    // ── 1×1 black 6-layer cubemap ────────────────────────────────────────────
+    constexpr VkFormat CUBE_FMT = VK_FORMAT_R8G8B8A8_UNORM;
+    constexpr uint32_t CUBE_LAYERS = 6;
+
+    // Create via raw VMA/Vulkan — Context::createImage doesn't set CUBE_COMPATIBLE_BIT.
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.flags       = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    ici.imageType   = VK_IMAGE_TYPE_2D;
+    ici.format      = CUBE_FMT;
+    ici.extent      = {1, 1, 1};
+    ici.mipLevels   = 1;
+    ici.arrayLayers = CUBE_LAYERS;
+    ici.samples     = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling      = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VmaAllocationCreateInfo aci{}; aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    m_fallbackCubemap.format    = CUBE_FMT;
+    m_fallbackCubemap.mipLevels = 1;
+    VK_CHECK(vmaCreateImage(m_ctx->allocator(), &ici, &aci,
+        &m_fallbackCubemap.image, &m_fallbackCubemap.allocation, nullptr), "fallback cubemap");
+
+    // Upload 6 × 1×1 black pixels
+    constexpr VkDeviceSize CUBE_SZ = 4 * CUBE_LAYERS; // RGBA8 × 6
+    auto staging = m_ctx->createBuffer(CUBE_SZ, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    std::memset(staging.mapped, 0, static_cast<size_t>(CUBE_SZ));
+
+    VkCommandBuffer cmd = m_ctx->beginSingleTimeCommands();
+
+    // Transition all 6 layers to TRANSFER_DST
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = m_fallbackCubemap.image;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, CUBE_LAYERS};
+    barrier.srcAccessMask = 0; barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    // Copy one pixel per face
+    std::array<VkBufferImageCopy, CUBE_LAYERS> copies;
+    for (uint32_t face = 0; face < CUBE_LAYERS; ++face) {
+        copies[face] = {};
+        copies[face].bufferOffset = face * 4;
+        copies[face].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, face, 1};
+        copies[face].imageExtent = {1, 1, 1};
+    }
+    vkCmdCopyBufferToImage(cmd, staging.buffer, m_fallbackCubemap.image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, CUBE_LAYERS, copies.data());
+
+    // Transition to SHADER_READ_ONLY
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    m_ctx->endSingleTimeCommands(cmd);
+    m_ctx->destroyBuffer(staging);
+
+    // Cube image view
+    VkImageViewCreateInfo ivCI{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    ivCI.image    = m_fallbackCubemap.image;
+    ivCI.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    ivCI.format   = CUBE_FMT;
+    ivCI.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, CUBE_LAYERS};
+    VK_CHECK(vkCreateImageView(dev, &ivCI, nullptr, &m_fallbackCubeView), "fallback cube view");
+
+    // Sampler
+    VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    si.magFilter = VK_FILTER_NEAREST; si.minFilter = VK_FILTER_NEAREST;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.maxLod = 1.f;
+    VK_CHECK(vkCreateSampler(dev, &si, nullptr, &m_fallbackCubeSampler), "fallback cube sampler");
+
+    // ── Allocate and write fallback IBL descriptor sets ──────────────────────
+    // (re-use m_whiteTexture for the BRDF LUT slot)
+    for (uint32_t fi = 0; fi < MAX_FRAMES_IN_FLIGHT; ++fi) {
+        if (m_fallbackIBLSets[fi] == VK_NULL_HANDLE) {
+            VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            ai.descriptorPool = m_descPool; ai.descriptorSetCount = 1; ai.pSetLayouts = &m_iblLayout;
+            VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &m_fallbackIBLSets[fi]));
+        }
+        auto writeCube = [&](uint32_t bind, VkImageView view) {
+            VkDescriptorImageInfo ii{m_fallbackCubeSampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstSet=m_fallbackIBLSets[fi]; w.dstBinding=bind; w.descriptorCount=1;
+            w.descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w.pImageInfo=&ii;
+            vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
+        };
+        writeCube(0, m_fallbackCubeView);   // irradiance
+        writeCube(1, m_fallbackCubeView);   // prefiltered
+        // BRDF LUT — use white 2D texture as neutral fallback
+        VkDescriptorImageInfo ii2 = m_whiteTexture->descriptorInfo();
+        VkWriteDescriptorSet w2{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w2.dstSet=m_fallbackIBLSets[fi]; w2.dstBinding=2; w2.descriptorCount=1;
+        w2.descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w2.pImageInfo=&ii2;
+        vkUpdateDescriptorSets(dev, 1, &w2, 0, nullptr);
+    }
 }
 
 void Renderer::createGeometryPipeline() {
@@ -625,9 +766,13 @@ void Renderer::createSSAOBlurPipeline() {
 }
 
 void Renderer::createLightingPipeline() {
-    VkDescriptorSetLayout sets[3]={m_gbufLayout,m_frameLayout,m_lightLayout};
+    // All 5 sets the shader accesses must be declared in the pipeline layout,
+    // even if some are conditionally populated at runtime.
+    VkDescriptorSetLayout sets[5]={m_gbufLayout,m_frameLayout,m_lightLayout,m_iblLayout,m_shadowLayout};
+    VkPushConstantRange pc{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LightingPC)};
     VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    li.setLayoutCount=3; li.pSetLayouts=sets;
+    li.setLayoutCount=5; li.pSetLayouts=sets;
+    li.pushConstantRangeCount=1; li.pPushConstantRanges=&pc;
     VK_CHECK(vkCreatePipelineLayout(m_ctx->device(),&li,nullptr,&m_lightPipeLayout));
     auto vert=createShaderModule(m_settings.shaderDir/"fullscreen_quad.vert.spv");
     auto frag=createShaderModule(m_settings.shaderDir/"lighting.frag.spv");
@@ -904,17 +1049,27 @@ void Renderer::recordLightingPass(VkCommandBuffer cmd, uint32_t fi) {
     VkRect2D sc{{0,0},ext}; vkCmdSetScissor(cmd,0,1,&sc);
     vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_lightPipeline);
 
-    // Sets 0-2: G-buffer, frame UBO, lights (always present)
+    // Always bind all 5 sets — use fallbacks when real resources aren't ready.
+    bool hasIBL    = m_iblProbe && m_iblProbe->isReady() && m_framesExt[fi].iblSet != VK_NULL_HANDLE;
+    bool hasShadow = m_shadowSystem != nullptr                && m_framesExt[fi].shadowSet != VK_NULL_HANDLE;
+
     VkDescriptorSet sets[5] = {
         m_frames[fi].gbufSet,
         m_frames[fi].frameSet,
         m_frames[fi].lightSet,
-        // Sets 3-4: IBL and shadow (may be VK_NULL_HANDLE if systems not ready)
-        (m_iblProbe && m_iblProbe->isReady()) ? m_framesExt[fi].iblSet    : VK_NULL_HANDLE,
-        m_shadowSystem                         ? m_framesExt[fi].shadowSet : VK_NULL_HANDLE,
+        hasIBL    ? m_framesExt[fi].iblSet    : m_fallbackIBLSets[fi],
+        hasShadow ? m_framesExt[fi].shadowSet : m_framesExt[fi].shadowSet,  // shadow always inited
     };
-    uint32_t setCount = (sets[3] != VK_NULL_HANDLE && sets[4] != VK_NULL_HANDLE) ? 5 : 3;
-    vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_lightPipeLayout,0,setCount,sets,0,nullptr);
+    vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_lightPipeLayout,0,5,sets,0,nullptr);
+
+    // Push lighting control flags + flat ambient (used when IBL is absent).
+    LightingPC lpc{};
+    lpc.flags            = (hasIBL ? 1u : 0u) | (hasShadow ? 2u : 0u);
+    lpc.ambientR         = m_currentScene ? m_currentScene->ambientColor().r : 0.1f;
+    lpc.ambientG         = m_currentScene ? m_currentScene->ambientColor().g : 0.1f;
+    lpc.ambientB         = m_currentScene ? m_currentScene->ambientColor().b : 0.15f;
+    lpc.ambientIntensity = m_currentScene ? m_currentScene->ambientIntensity() : 0.05f;
+    vkCmdPushConstants(cmd,m_lightPipeLayout,VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(LightingPC),&lpc);
 
     vkCmdDraw(cmd,3,1,0,0);
     vkCmdEndRenderPass(cmd);
@@ -981,7 +1136,27 @@ void Renderer::recordFrame(VkCommandBuffer cmd, uint32_t imageIdx,
     // 3. SSAO blur pass
     recordSSAOBlurPass(cmd, fi);
 
-    // 4. Lighting pass — reads SSAO blurred (gbufSet binding 6).
+    // 4. Explicit barrier: ensure shadow array is in DEPTH_STENCIL_READ_ONLY and
+    //    all cascade writes are visible to the lighting fragment shader.
+    //    The render pass finalLayout transitions cover the layout, but this barrier
+    //    makes the memory explicitly available even across render pass boundaries.
+    if (m_shadowSystem) {
+        VkImageMemoryBarrier shadowBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        shadowBarrier.srcAccessMask       = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        shadowBarrier.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        shadowBarrier.oldLayout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        shadowBarrier.newLayout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        shadowBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        shadowBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        shadowBarrier.image               = m_shadowSystem->shadowArrayImage();
+        shadowBarrier.subresourceRange    = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, NUM_CASCADES};
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &shadowBarrier);
+    }
+
+    // 5. Lighting pass — reads SSAO blurred (gbufSet binding 6).
     //    The SSAO render pass already transitions ssaoBlur to SHADER_READ_ONLY.
     recordLightingPass(cmd, fi);
 
@@ -1006,11 +1181,16 @@ void Renderer::handleResize() {
 // render() — called once per frame by the application
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::render(Scene& scene) {
+    m_currentScene = &scene;
     static auto startTime = std::chrono::high_resolution_clock::now();
     auto now = std::chrono::high_resolution_clock::now();
     float time = std::chrono::duration<float>(now - startTime).count();
 
     uint32_t fi = m_currentFrame;
+
+    // ── Promote async IBL probe once the background thread finishes ──────────
+    // We wait for the fence FIRST so we know the GPU is idle for this slot,
+    // then swap in the real probe and update the descriptor sets.
     auto& frame = m_swapchain->frame(fi);
 
     // Wait for the previous use of this frame slot to finish.
@@ -1184,19 +1364,8 @@ void Renderer::initIBL(const std::filesystem::path& hdrPath) {
 
 void Renderer::createIBLDescriptors() {
     if (!m_iblProbe || !m_iblProbe->isReady()) return;
+    // m_iblLayout is already created in createDescriptorLayouts().
     auto dev = m_ctx->device();
-
-    // Layout: set 3 — irradianceMap, prefilteredMap, brdfLUT
-    {
-        VkDescriptorSetLayoutBinding bs[] = {
-            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-            {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        };
-        VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 3; ci.pBindings = bs;
-        VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &m_iblLayout));
-    }
 
     // Allocate and write one set per frame (same IBL images across all frames)
     for (auto& fx : m_framesExt) {
@@ -1222,39 +1391,34 @@ void Renderer::createIBLDescriptors() {
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::initShadows() {
     m_shadowSystem = std::make_unique<ShadowSystem>();
+    std::cout << "  shadow::init..." << std::flush;
     m_shadowSystem->init(m_ctx);
+    std::cout << " OK  pipeline..." << std::flush;
     m_shadowSystem->createPipeline(m_settings.shaderDir, m_frameLayout);
+    std::cout << " OK  descriptors..." << std::flush;
     createShadowDescriptors();
+    std::cout << " OK" << std::flush;
 }
 
 void Renderer::createShadowDescriptors() {
+    // m_shadowLayout is already created in createDescriptorLayouts().
     auto dev = m_ctx->device();
 
-    // Layout: set 4 — shadowMap sampler2DArrayShadow + ShadowUBO
-    {
-        VkDescriptorSetLayoutBinding bs[] = {
-            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        };
-        VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 2; ci.pBindings = bs;
-        VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &m_shadowLayout));
-    }
-
     for (auto& fx : m_framesExt) {
+        // Fix: use VkMemoryPropertyFlags, not VmaMemoryUsage
         fx.shadowUBO = m_ctx->createBuffer(sizeof(ShadowUBO),
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VMA_MEMORY_USAGE_AUTO_PREFER_HOST, true);
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
         VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         ai.descriptorPool = m_descPool; ai.descriptorSetCount = 1; ai.pSetLayouts = &m_shadowLayout;
         VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &fx.shadowSet));
 
-        // Shadow map array sampler
+        // Shadow map array sampler — must use DEPTH_STENCIL_READ_ONLY_OPTIMAL for sampler2DArrayShadow
         VkDescriptorImageInfo imgInfo{
             m_shadowSystem->shadowSampler(),
             m_shadowSystem->shadowArrayView(),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
         };
         VkWriteDescriptorSet w0{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         w0.dstSet=fx.shadowSet; w0.dstBinding=0; w0.descriptorCount=1;
@@ -1293,18 +1457,17 @@ void Renderer::recordShadowDraw(VkCommandBuffer cmd, uint32_t cascadeIdx,
                                   const std::vector<Mesh*>& meshes, uint32_t fi)
 {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowSystem->pipeline());
+    // No descriptor sets needed — the light-space matrix is in the push constant.
 
-    // Bind scene set (frameUBO which contains shadow matrices for this cascade)
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                             m_shadowSystem->pipeLayout(), 0, 1,
-                             &m_frames[fi].frameSet, 0, nullptr);
+    // Grab the per-cascade light-space matrix from the shadow UBO we already filled.
+    const ShadowUBO* ubo = reinterpret_cast<const ShadowUBO*>(m_framesExt[fi].shadowUBO.mapped);
 
     for (auto* mesh : meshes) {
         if (!mesh || !mesh->gpuReady) continue;
 
-        struct PushData { glm::mat4 model; uint32_t cascade; } pc;
-        pc.model   = mesh->modelMatrix();
-        pc.cascade = cascadeIdx;
+        struct PushData { glm::mat4 model; glm::mat4 lightSpace; } pc;
+        pc.model      = mesh->modelMatrix();
+        pc.lightSpace = ubo->lightSpaceMatrix[cascadeIdx];
         vkCmdPushConstants(cmd, m_shadowSystem->pipeLayout(),
                            VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushData), &pc);
 

@@ -226,6 +226,7 @@ private:
 
     uint32_t m_currentFrame = 0;
     Stats    m_stats;
+    Scene*   m_currentScene = nullptr;  // set each frame in render(), used by recordLightingPass
 
     // Scratch buffers reused every frame to avoid heap allocations.
     std::vector<Mesh*> m_visibleScratch;
@@ -239,6 +240,13 @@ private:
     // Descriptor set layouts for new lighting pass bindings (sets 3 & 4)
     VkDescriptorSetLayout m_iblLayout    = VK_NULL_HANDLE; // set 3: irr+pf+brdfLUT
     VkDescriptorSetLayout m_shadowLayout = VK_NULL_HANDLE; // set 4: shadowArray + shadowUBO
+
+    // Fallback descriptor sets used when IBL probe has not been loaded.
+    // Always valid; point to 1×1 black cubemaps and a white 2D BRDF LUT.
+    AllocatedImage m_fallbackCubemap;                                          // 1×1 black 6-layer cube
+    VkImageView    m_fallbackCubeView   = VK_NULL_HANDLE;
+    VkSampler      m_fallbackCubeSampler = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_fallbackIBLSets{};
 
     // Per-frame IBL / shadow descriptor sets
     struct PerFrameExt {
@@ -260,6 +268,7 @@ private:
     void initGPUCulling();
     void createIBLDescriptors();
     void createShadowDescriptors();
+    void createFallbackIBLDescriptors(); // creates 1×1 dummy sets for when no HDR is loaded
 
     // Shadow geometry draw callback
     void recordShadowDraw(VkCommandBuffer cmd, uint32_t cascadeIdx,

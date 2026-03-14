@@ -44,18 +44,26 @@ void ShadowSystem::init(std::shared_ptr<Context> ctx) {
     createShadowArrayView();
     createSampler();
 
-    // Transition the array to depth attachment initial layout
+    // Transition the array to DEPTH_STENCIL_READ_ONLY_OPTIMAL.
+    // This is the "rest" layout between frames; renderCascades transitions each
+    // layer to ATTACHMENT_OPTIMAL before writing, and the render pass finalLayout
+    // transitions it back to READ_ONLY_OPTIMAL afterwards.
     VkCommandBuffer cmd = ctx->beginSingleTimeCommands();
     VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    b.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.image = m_shadowArray.image;
     b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, NUM_CASCADES};
-    b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    b.srcAccessMask = 0;
+    // DEPTH_STENCIL_READ_ONLY_OPTIMAL is consumed by early/late fragment test stages
+    // (depth compare during shadow reads) AND fragment shader (sampler2DArrayShadow).
+    b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmd,
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0,
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT  |
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
         0,nullptr, 0,nullptr, 1,&b);
     ctx->endSingleTimeCommands(cmd);
 }
@@ -69,7 +77,10 @@ void ShadowSystem::createRenderPasses() {
     depth.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
     depth.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depth.initialLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    // The image is initialised to (and rests in) READ_ONLY_OPTIMAL between frames.
+    // Vulkan will implicitly transition it to ATTACHMENT_OPTIMAL for the subpass,
+    // then back to READ_ONLY_OPTIMAL via finalLayout.
+    depth.initialLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     depth.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference depthRef{0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
@@ -148,11 +159,11 @@ void ShadowSystem::createPipeline(const std::filesystem::path& shaderDir,
 {
     auto dev = m_ctx->device();
 
-    // Push constant: model matrix (64 bytes) + cascade index (4 bytes)
-    VkPushConstantRange pc{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4) + 4};
-    VkDescriptorSetLayout layouts[] = { sceneLayout };
+    // Push constant: model matrix (64 bytes) + lightSpaceMatrix (64 bytes) = 128 bytes.
+    // No descriptor sets needed — the per-cascade light-space matrix is pushed directly.
+    VkPushConstantRange pc{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4) * 2};
     VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    li.setLayoutCount = 1; li.pSetLayouts = layouts;
+    li.setLayoutCount = 0; li.pSetLayouts = nullptr;
     li.pushConstantRangeCount = 1; li.pPushConstantRanges = &pc;
     VK_CHECK(vkCreatePipelineLayout(dev, &li, nullptr, &m_pipeLayout));
 
@@ -167,13 +178,14 @@ void ShadowSystem::createPipeline(const std::filesystem::path& shaderDir,
     stage.stage  = VK_SHADER_STAGE_VERTEX_BIT;
     stage.module = vert; stage.pName = "main";
 
-    // Vertex layout: position only (vec3 at binding 0, location 0)
-    VkVertexInputBindingDescription binding{0, sizeof(float)*12, VK_VERTEX_INPUT_RATE_VERTEX};
-    // stride = sizeof(Vertex) = vec3+vec3+vec2+vec4 = 12+12+8+16 = 48 bytes = 12 floats
-    VkVertexInputAttributeDescription attr{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
+    // Shadow shader only reads position (location 0).
+    // Declare only that attribute — with the full Vertex stride — so the GPU
+    // fetches position from the correct offset without validation warnings.
+    VkVertexInputBindingDescription binding = Vertex::getBindingDescription();
+    VkVertexInputAttributeDescription posAttr = Vertex::getAttributeDescriptions()[0]; // location 0, position
     VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vi.vertexBindingDescriptionCount   = 1; vi.pVertexBindingDescriptions   = &binding;
-    vi.vertexAttributeDescriptionCount = 1; vi.pVertexAttributeDescriptions = &attr;
+    vi.vertexAttributeDescriptionCount = 1; vi.pVertexAttributeDescriptions = &posAttr;
 
     VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -289,8 +301,8 @@ void ShadowSystem::update(const Camera& camera, glm::vec3 lightDir, float lambda
                                           0.f, 2.f * radius);
         lightProj[1][1] *= -1;
 
-        m_ubo.cascades[c].lightSpaceMatrix = lightProj * lightView;
-        m_ubo.cascades[c].splitDepth       = (subProj * camView * glm::vec4(0,0,-far,1)).z;
+        m_ubo.lightSpaceMatrix[c] = lightProj * lightView;
+        m_ubo.splitDepths[c]      = (subProj * camView * glm::vec4(0,0,-far,1)).z;
     }
 }
 
@@ -301,21 +313,11 @@ void ShadowSystem::renderCascades(VkCommandBuffer cmd, const DrawFn& drawFn) {
 
     for (uint32_t c = 0; c < NUM_CASCADES; ++c) {
         auto& cascade = m_cascades[c];
-
-        // Transition this layer back to attachment (lighting pass reads as SHADER_READ_ONLY,
-        // so we need to transition before writing again)
-        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        b.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        b.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image = m_shadowArray.image;
-        b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, c, 1};
-        b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0,
-            0,nullptr, 0,nullptr, 1,&b);
+        // No manual barrier needed here.
+        // The render pass initialLayout = DEPTH_STENCIL_READ_ONLY_OPTIMAL matches
+        // the actual image state, and the subpass dependency (EXTERNAL→0,
+        // FRAGMENT_SHADER/SHADER_READ → EARLY_FRAGMENT_TESTS/ATTACHMENT_WRITE)
+        // implicitly handles both the layout transition and the memory barrier.
 
         VkRenderPassBeginInfo rpBI{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         rpBI.renderPass  = cascade.renderPass;
@@ -334,21 +336,11 @@ void ShadowSystem::renderCascades(VkCommandBuffer cmd, const DrawFn& drawFn) {
         drawFn(cmd, c);
 
         vkCmdEndRenderPass(cmd);
+        // The render pass finalLayout automatically transitions this layer to
+        // VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL — no extra barrier needed.
     }
-
-    // Transition entire array to SHADER_READ_ONLY for lighting pass
-    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    b.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = m_shadowArray.image;
-    b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, NUM_CASCADES};
-    b.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-        0,nullptr, 0,nullptr, 1,&b);
+    // All 4 cascade layers are now in DEPTH_STENCIL_READ_ONLY_OPTIMAL, ready for
+    // the lighting pass to sample via sampler2DArrayShadow.
 }
 
 // ── destroy ───────────────────────────────────────────────────────────────────

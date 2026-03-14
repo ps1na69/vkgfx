@@ -163,6 +163,15 @@ struct TonemapPC {
 // SSAO blur push constant.
 struct BlurPC { Vec2 texelSize; };
 
+// Lighting pass push constant — flags + flat ambient fallback when IBL is absent.
+struct LightingPC {
+    uint32_t flags;             // bit 0 = hasIBL, bit 1 = hasShadow
+    float    ambientR;
+    float    ambientG;
+    float    ambientB;
+    float    ambientIntensity;
+};
+
 // GPU light matching lighting.frag GpuLight struct.
 struct alignas(16) GpuLight {
     Vec4     position;       // xyz=world pos, w=range

@@ -8,7 +8,7 @@
  *    ╚═══╝  ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝  ╚═╝
  *
  *  VKGFX — High-performance Vulkan deferred renderer
- *  C++20 | Vulkan 1.3 | GLFW | GLM | tinygltf | KTX2
+ *  C++20 | Vulkan 1.3 | GLFW | GLM | tinygltf | STBimage
  */
 
 #include "types.h"
