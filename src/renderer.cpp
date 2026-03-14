@@ -70,7 +70,7 @@ Renderer::Renderer(Window& window, const RendererSettings& settings)
     std::cout << " OK\n[VKGFX] init: GPU culling..." << std::flush;
     initGPUCulling();
     std::cout << " OK\n[VKGFX] init: IBL..." << std::flush;
-    //initIBL();  // tries assets/sky.hdr; no-ops gracefully if missing
+    initIBL();  // tries assets/sky.hdr; no-ops gracefully if missing
     std::cout << " OK" << std::endl;
 
     uint32_t wc = settings.workerThreads == 0
@@ -1064,7 +1064,8 @@ void Renderer::recordLightingPass(VkCommandBuffer cmd, uint32_t fi) {
 
     // Push lighting control flags + flat ambient (used when IBL is absent).
     LightingPC lpc{};
-    lpc.flags            = (hasIBL ? 1u : 0u) | (hasShadow ? 2u : 0u);
+    lpc.flags            = (hasIBL ? 1u : 0u) | (hasShadow ? 2u : 0u)
+                          | ((m_settings.debugGBuffer & 0xFu) << 4u);
     lpc.ambientR         = m_currentScene ? m_currentScene->ambientColor().r : 0.1f;
     lpc.ambientG         = m_currentScene ? m_currentScene->ambientColor().g : 0.1f;
     lpc.ambientB         = m_currentScene ? m_currentScene->ambientColor().b : 0.15f;
@@ -1212,23 +1213,30 @@ void Renderer::render(Scene& scene) {
         auto ubo = scene.camera()->toFrameUBO(time);
         std::memcpy(m_frames[fi].frameUBO.mapped, &ubo, sizeof(FrameUBO));
 
-        // SSAOParams — must include current proj/invProj/view + kernel
-        SSAOParams ssaoP{};
-        ssaoP.proj      = ubo.proj;
-        ssaoP.invProj   = ubo.invProj;
-        ssaoP.view      = ubo.view;
-        for (uint32_t i=0; i<32; ++i) ssaoP.samples[i]=m_ssaoKernel[i];
-        VkExtent2D ext=m_swapchain->extent();
-        ssaoP.noiseScale = {static_cast<float>(ext.width)/4.f, static_cast<float>(ext.height)/4.f};
-        ssaoP.radius     = m_settings.ssaoRadius;
-        ssaoP.bias       = m_settings.ssaoBias;
-        std::memcpy(m_frames[fi].ssaoUBO.mapped, &ssaoP, sizeof(SSAOParams));
+        // SSAOParams — write directly to the mapped GPU buffer (avoids 720B stack alloc).
+        {
+            VkExtent2D ext=m_swapchain->extent();
+            auto* ssaoP = static_cast<SSAOParams*>(m_frames[fi].ssaoUBO.mapped);
+            ssaoP->proj      = ubo.proj;
+            ssaoP->invProj   = ubo.invProj;
+            ssaoP->view      = ubo.view;
+            for (uint32_t i=0; i<32; ++i) ssaoP->samples[i]=m_ssaoKernel[i];
+            ssaoP->noiseScale = {static_cast<float>(ext.width)/4.f, static_cast<float>(ext.height)/4.f};
+            ssaoP->radius    = m_settings.ssaoRadius;
+            ssaoP->bias      = m_settings.ssaoBias;
+        }
     }
 
-    // LightSSBO
-    LightSSBO lightBuf{};
-    scene.buildLightBuffer(lightBuf);
-    std::memcpy(m_frames[fi].lightSSBO.mapped, &lightBuf, sizeof(LightSSBO));
+    // LightSSBO — build directly into the persistently-mapped GPU buffer.
+    // Previously allocated 16,400 bytes (LightSSBO = uint32 + GpuLight[256]) on
+    // the stack every frame, which combined with other large locals (SSAOParams=720B,
+    // FrameUBO=352B) created a stack frame large enough to corrupt the caller's stack
+    // on Windows — manifesting as MSVC RTC #2 "stack around variable 'cx' corrupted".
+    {
+        auto* lightBuf = static_cast<LightSSBO*>(m_frames[fi].lightSSBO.mapped);
+        lightBuf->count = 0;
+        scene.buildLightBuffer(*lightBuf);
+    }
 
     // ── CPU-side frustum culling (also feeds GPU culling instance list) ──────
     m_visibleScratch = scene.visibleMeshes(m_threadPool.get());

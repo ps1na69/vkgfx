@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
         // ── Camera ────────────────────────────────────────────────────────────
         vkgfx::Camera camera;
         camera.setPosition({0.f, 1.5f, -4.f})
-              .setYaw(-90.f)
+              .setYaw(90.f)   // yaw=90 → forward=(0,0,1), looks at cube at origin
               .setAspect(static_cast<float>(ws.width) / ws.height);
 
         // ── Scene ─────────────────────────────────────────────────────────────

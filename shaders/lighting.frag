@@ -46,7 +46,9 @@ layout(set = 4, binding = 1) uniform ShadowUBO {
 
 // ── Push constant — feature flags + flat ambient ─────────────────────────────
 layout(push_constant) uniform LightingPC {
-    uint  flags;             // bit 0 = hasIBL, bit 1 = hasShadow
+    uint  flags;             // bit 0=hasIBL, bit 1=hasShadow
+                             // bits 4-7 = debug vis: 0=normal, 1=albedo, 2=normal, 3=metallic,
+                             //                        4=roughness, 5=worldpos, 6=depth, 7=ao
     float ambientR;
     float ambientG;
     float ambientB;
@@ -112,6 +114,7 @@ vec3 evaluate_light(uint i, vec3 p, vec3 N, vec3 V, vec3 alb, float m, float r, 
     vec3  F=F_Schlick(HdotV,F0);
     float G=G_Smith(NdotV,NdotL,r);
     vec3 spec=(D*F*G)/(4.0*max(NdotV,0.001)*max(NdotL,0.001));
+    spec = min(spec, vec3(10.0)); // clamp specular peaks before ACES to prevent blow-out
     vec3 kD=(vec3(1.0)-F)*(1.0-m);
     return (kD*alb*INV_PI+spec)*lc*a*NdotL;
 }
@@ -148,8 +151,28 @@ void main() {
         return;
     }
 
+    // ── Debug G-buffer visualization ─────────────────────────────────────────
+    // Set RendererSettings::debugGBuffer = 1..7 to visualize individual channels.
+    uint dbg = (pc.flags >> 4u) & 0xFu;
+    if (dbg != 0u) {
+        if (dbg == 1u) { outHDR = vec4(texture(gAlbedo,   inUV).rgb, 1.0); return; }
+        if (dbg == 2u) { outHDR = vec4(texture(gNormal,   inUV).rgb * 0.5 + 0.5, 1.0); return; }
+        if (dbg == 3u) { outHDR = vec4(vec3(texture(gMaterial, inUV).r), 1.0); return; } // metallic
+        if (dbg == 4u) { outHDR = vec4(vec3(texture(gMaterial, inUV).g), 1.0); return; } // roughness
+        if (dbg == 5u) { outHDR = vec4(fract(texture(gWorldPos, inUV).rgb), 1.0); return; }
+        if (dbg == 6u) { outHDR = vec4(vec3(texture(gDepth, inUV).r), 1.0); return; }
+        if (dbg == 7u) { outHDR = vec4(vec3(texture(aoTexture, inUV).r), 1.0); return; }
+    }
+
     vec3  worldPos = texture(gWorldPos,inUV).rgb;
-    vec3  N        = normalize(texture(gNormal,inUV).rgb);
+    vec3  rawN     = texture(gNormal,inUV).rgb;
+    // Guard against zero-length or NaN normals (unwritten pixels, or degenerate TBN
+    // from procedural meshes before the geometry pass was patched).
+    if (any(isnan(rawN)) || any(isinf(rawN)) || dot(rawN, rawN) < 0.01) {
+        outHDR = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    vec3  N        = normalize(rawN);
     vec4  albAO    = texture(gAlbedo,inUV);
     vec4  mat      = texture(gMaterial,inUV);
     vec3  emissive = texture(gEmissive,inUV).rgb;

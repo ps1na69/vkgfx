@@ -353,11 +353,18 @@ std::shared_ptr<Mesh> Mesh::createQuad() {
 
 // ─── Tangent generation ───────────────────────────────────────────────────────
 void Mesh::computeTangents() {
-    // Skip vertices that already have valid tangents (from glTF TANGENT accessor).
-    bool hasTangents = false;
-    for (auto& v : m_vertices)
-        if (glm::length2(Vec3(v.tangent)) > 1e-4f) { hasTangents = true; break; }
+    // Skip if ALL vertices already have explicit tangents (e.g. loaded from glTF).
+    // A tangent is considered explicit if its xyz is non-zero AND w is ±1.
+    // The default Vertex tangent is Vec4(0,0,0,0) — zero-length xyz — so procedural
+    // meshes always fall through to the accumulation pass below.
+    bool hasTangents = true;
+    for (auto& v : m_vertices) {
+        if (glm::length2(Vec3(v.tangent)) < 1e-4f) { hasTangents = false; break; }
+    }
     if (hasTangents) return;
+
+    // Reset tangents before accumulation so we don't add onto stale data.
+    for (auto& v : m_vertices) v.tangent = Vec4(0.f);
 
     // MikkTSpace-style accumulation.
     for (size_t i = 0; i + 2 < m_indices.size(); i += 3) {

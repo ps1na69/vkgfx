@@ -34,6 +34,9 @@ struct RendererSettings {
     bool         wireframe      = false;  // geometry pass polygon mode
     bool         frustumCulling = true;
     bool         validation     = true;
+    // G-buffer debug visualisation (0=off, 1=albedo, 2=normals, 3=metallic,
+    //                                4=roughness, 5=worldpos, 6=depth, 7=ao)
+    uint32_t     debugGBuffer   = 0;
     float        ssaoRadius     = 0.5f;
     float        ssaoBias       = 0.025f;
     float        exposure       = 0.f;   // EV offset for tonemap

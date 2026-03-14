@@ -95,7 +95,7 @@ struct Vertex {
     Vec3 position {0.f};
     Vec3 normal   {0.f, 1.f, 0.f};
     Vec2 uv       {0.f};
-    Vec4 tangent  {1.f, 0.f, 0.f, 1.f};
+    Vec4 tangent  {0.f, 0.f, 0.f, 0.f};  // zero = not yet computed; set by computeTangents() or glTF load
 
     static VkVertexInputBindingDescription getBindingDescription() {
         return { 0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX };

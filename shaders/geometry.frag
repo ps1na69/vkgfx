@@ -58,8 +58,16 @@ void main()
     // Transform from tangent space to world space using the TBN matrix.
     // mat3(inT, inB, inN) is the TBN matrix; multiplying by tsNormal gives
     // the world-space normal.
-    mat3 TBN       = mat3(normalize(inT), normalize(inB), normalize(inN));
-    vec3 worldNorm = normalize(TBN * tsNormal);
+    // Guard against degenerate TBN (happens when tangent is parallel to normal,
+    // e.g. procedural meshes on faces aligned with the default tangent axis).
+    // If T is zero-length after Gram-Schmidt in the vertex shader, normalise(T) = NaN.
+    // Use the geometric normal as fallback so lighting still works.
+    vec3 safeT = normalize(inT);
+    vec3 safeB = normalize(inB);
+    vec3 safeN = normalize(inN);
+    bool validTBN = dot(safeT, safeT) > 0.5 && dot(safeB, safeB) > 0.5;
+    mat3 TBN       = validTBN ? mat3(safeT, safeB, safeN) : mat3(1.0);
+    vec3 worldNorm = validTBN ? normalize(TBN * tsNormal) : safeN;
 
     // ── Metallic / Roughness ──────────────────────────────────────────────────
     vec4 mrSample = texture(metallicRoughnessMap, inTexCoord);

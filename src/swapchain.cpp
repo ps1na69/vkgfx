@@ -332,6 +332,12 @@ void Swapchain::recreate(uint32_t width, uint32_t height) {
 }
 
 VkSurfaceFormatKHR Swapchain::chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats) const {
+    // Prefer RGBA over BGRA so shader output vec4(r,g,b,a) maps naturally to screen.
+    // If RGBA_SRGB is unavailable (rare on Windows), fall back to BGRA_SRGB — the
+    // tonemap shader will swap R/B channels in that case.
+    for (const auto& f : formats)
+        if (f.format == VK_FORMAT_R8G8B8A8_SRGB && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+            return f;
     for (const auto& f : formats)
         if (f.format == VK_FORMAT_B8G8R8A8_SRGB && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
             return f;

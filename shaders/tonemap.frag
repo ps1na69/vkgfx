@@ -73,9 +73,12 @@ void main()
     else
         ldr = hable(hdr, 1.0);
 
-    // sRGB gamma correction (apply only when swapchain format is UNORM, not SRGB).
-    // pow(x, 1/2.2) is a close approximation of the full sRGB piecewise function.
-    ldr = pow(clamp(ldr, 0.0, 1.0), vec3(1.0 / 2.2));
+    // NOTE: sRGB gamma is NOT applied here.
+    // The swapchain format is VK_FORMAT_B8G8R8A8_SRGB, which means the GPU
+    // hardware applies the sRGB transfer function automatically when writing
+    // the framebuffer. Applying pow(1/2.2) here would double-apply gamma and
+    // over-brighten everything to white.
+    ldr = clamp(ldr, 0.0, 1.0);
 
     outColor = vec4(ldr, 1.0);
 }
