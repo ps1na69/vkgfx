@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  push:
+    branches: [main, refactor]
+  pull_request:
+
+jobs:
+
+# ── Linux ──────────────────────────────────────────────────────────────────────
+  build-linux:
+    name: Ubuntu — ${{ matrix.build_type }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release, Debug]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            libvulkan-dev \
+            vulkan-validationlayers \
+            libglfw3-dev \
+            libglm-dev \
+            glslang-tools \
+            spirv-tools \
+            ninja-build \
+            xvfb
+
+      - name: Install glslc
+        run: |
+          # glslc is in the Vulkan SDK; fall back to glslang if not available
+          which glslc || sudo apt-get install -y glslc || true
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DVKGFX_BUILD_TESTS=ON \
+            -DVKGFX_BUILD_EXAMPLES=ON \
+            -DVKGFX_ENABLE_VALIDATION=ON
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build_type }} -j4
+
+      - name: Run tests (headless — no display needed)
+        # test_render_pass and test_vertex_layout are headless; skip test_ibl_load
+        # if sky.hdr is absent (CI does not have it, test skips gracefully)
+        run: |
+          cd build
+          ctest --build-config ${{ matrix.build_type }} \
+                --output-on-failure \
+                --timeout 60
+
+      - name: Install
+        run: cmake --install build --prefix /tmp/vkgfx-install
+
+      - name: Verify install layout
+        run: |
+          echo "=== Installed files ==="
+          find /tmp/vkgfx-install -type f | sort
+
+          # Headers
+          test -d /tmp/vkgfx-install/include/vkgfx
+          test -f /tmp/vkgfx-install/include/vkgfx/vkgfx.h
+          test -f /tmp/vkgfx-install/include/vkgfx/config.h
+          test -f /tmp/vkgfx-install/include/vkgfx/renderer.h
+
+          # Library
+          test -f /tmp/vkgfx-install/lib/libvkgfx.a
+
+          # CMake package
+          test -f /tmp/vkgfx-install/lib/cmake/vkgfx/vkgfxTargets.cmake
+          test -f /tmp/vkgfx-install/lib/cmake/vkgfx/vkgfxConfig.cmake
+          test -f /tmp/vkgfx-install/lib/cmake/vkgfx/vkgfxConfigVersion.cmake
+
+          echo "=== Install layout OK ==="
+
+      - name: Package (Release only)
+        if: matrix.build_type == 'Release'
+        run: |
+          cd /tmp
+          tar czf vkgfx-linux-x64.tar.gz vkgfx-install/
+
+      - name: Upload artifact
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vkgfx-linux-x64
+          path: /tmp/vkgfx-linux-x64.tar.gz
+
+# ── Windows ────────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Windows — ${{ matrix.build_type }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release, Debug]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.1.1
+        with:
+          version: latest
+          cache: true
+
+      - name: Install glfw + glm via vcpkg
+        run: |
+          vcpkg install glfw3:x64-windows glm:x64-windows
+          echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+
+      - name: Configure
+        run: |
+          cmake -S . -B build `
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVKGFX_BUILD_TESTS=ON `
+            -DVKGFX_BUILD_EXAMPLES=ON
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build_type }} -j4
+
+      - name: Run tests
+        run: |
+          cd build
+          ctest --build-config ${{ matrix.build_type }} `
+                --output-on-failure `
+                --timeout 60
+
+      - name: Install
+        run: cmake --install build --prefix C:/vkgfx-install --config ${{ matrix.build_type }}
+
+      - name: Verify install layout
+        run: |
+          Test-Path "C:/vkgfx-install/include/vkgfx/vkgfx.h"    | Should -Be $true
+          Test-Path "C:/vkgfx-install/lib/vkgfx.lib"             | Should -Be $true
+          Test-Path "C:/vkgfx-install/lib/cmake/vkgfx/vkgfxTargets.cmake" | Should -Be $true
+        shell: pwsh
+
+      - name: Package (Release only)
+        if: matrix.build_type == 'Release'
+        run: |
+          Compress-Archive -Path C:/vkgfx-install -DestinationPath vkgfx-windows-x64.zip
+        shell: pwsh
+
+      - name: Upload artifact
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vkgfx-windows-x64
+          path: vkgfx-windows-x64.zip

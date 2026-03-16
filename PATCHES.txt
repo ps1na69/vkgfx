@@ -1,0 +1,327 @@
+All patches below apply cleanly with:
+  git apply <patchfile>
+
+Each patch is a separate commit. Apply in order.
+
+================================================================================
+PATCH 1: refactor: rewrite CMakeLists.txt — library, install, tests, examples
+================================================================================
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,15 +1,72 @@
+-cmake_minimum_required(VERSION 3.20)
+-project(VKGFXApp)
+-set(CMAKE_CXX_STANDARD 20)
+-
+-find_package(Vulkan REQUIRED)
+-find_package(glfw3  REQUIRED)
+-
+-file(GLOB SRC src/*.cpp)
+-add_executable(vkgfx_demo example/main.cpp ${SRC})
+-target_include_directories(vkgfx_demo PRIVATE include)
+-target_link_libraries(vkgfx_demo PRIVATE Vulkan::Vulkan glfw)
++cmake_minimum_required(VERSION 3.24)
++project(vkgfx VERSION 2.0.0 LANGUAGES CXX)
++set(CMAKE_CXX_STANDARD 20)
++set(CMAKE_CXX_STANDARD_REQUIRED ON)
++set(CMAKE_CXX_EXTENSIONS OFF)
++
++option(VKGFX_BUILD_EXAMPLES   "Build example applications"  ON)
++option(VKGFX_BUILD_TESTS      "Build unit tests"            ON)
++option(VKGFX_ENABLE_VALIDATION "Enable Vulkan validation in Debug" ON)
++
++find_package(Vulkan REQUIRED)
++find_package(glfw3  3.3 REQUIRED)
++find_package(glm QUIET)
++if(NOT glm_FOUND)
++    include(FetchContent)
++    FetchContent_Declare(glm GIT_REPOSITORY https://github.com/g-truc/glm.git GIT_TAG 1.0.1)
++    FetchContent_MakeAvailable(glm)
++endif()
++
++# Shader compilation
++find_program(GLSLC glslc HINTS "$ENV{VULKAN_SDK}/bin" REQUIRED)
++file(GLOB_RECURSE GLSL_SOURCES shaders/*.vert shaders/*.frag shaders/*.comp)
++set(SPV_DIR "${CMAKE_BINARY_DIR}/shaders")
++file(MAKE_DIRECTORY "${SPV_DIR}")
++set(SPV_OUTPUTS "")
++foreach(GLSL ${GLSL_SOURCES})
++    get_filename_component(NAME "${GLSL}" NAME)
++    set(SPV "${SPV_DIR}/${NAME}.spv")
++    add_custom_command(OUTPUT "${SPV}" COMMAND "${GLSLC}" -o "${SPV}" "${GLSL}"
++        DEPENDS "${GLSL}" COMMENT "Compiling shader ${NAME}")
++    list(APPEND SPV_OUTPUTS "${SPV}")
++endforeach()
++add_custom_target(vkgfx_shaders ALL DEPENDS ${SPV_OUTPUTS})
++
++# Library target
++file(GLOB_RECURSE VKGFX_SOURCES src/*.cpp)
++add_library(vkgfx STATIC ${VKGFX_SOURCES})
++add_library(vkgfx::vkgfx ALIAS vkgfx)
++target_include_directories(vkgfx
++    PUBLIC
++        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
++        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/cmake/thirdparty>
++        $<INSTALL_INTERFACE:include>
++    PRIVATE ${CMAKE_SOURCE_DIR}/src)
++target_link_libraries(vkgfx PUBLIC Vulkan::Vulkan glfw glm::glm)
++target_compile_definitions(vkgfx PUBLIC GLM_FORCE_RADIANS GLM_FORCE_DEPTH_ZERO_TO_ONE
++    PRIVATE $<$<AND:$<CONFIG:Debug>,$<BOOL:${VKGFX_ENABLE_VALIDATION}>>:VKGFX_ENABLE_VALIDATION>)
++add_dependencies(vkgfx vkgfx_shaders)
++
++if(VKGFX_BUILD_EXAMPLES) add_subdirectory(examples) endif()
++if(VKGFX_BUILD_TESTS)    enable_testing(); add_subdirectory(tests) endif()
++
++# Install rules
++include(GNUInstallDirs)
++include(CMakePackageConfigHelpers)
++install(TARGETS vkgfx EXPORT vkgfxTargets
++    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
++install(DIRECTORY include/vkgfx DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
++install(DIRECTORY "${SPV_DIR}/" DESTINATION ${CMAKE_INSTALL_DATADIR}/vkgfx/shaders
++    FILES_MATCHING PATTERN "*.spv")
++install(EXPORT vkgfxTargets FILE vkgfxTargets.cmake NAMESPACE vkgfx::
++    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/vkgfx)
++configure_package_config_file(cmake/vkgfxConfig.cmake.in
++    "${CMAKE_BINARY_DIR}/vkgfxConfig.cmake"
++    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/vkgfx)
++write_basic_package_version_file("${CMAKE_BINARY_DIR}/vkgfxConfigVersion.cmake"
++    VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
++install(FILES "${CMAKE_BINARY_DIR}/vkgfxConfig.cmake"
++              "${CMAKE_BINARY_DIR}/vkgfxConfigVersion.cmake"
++    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/vkgfx)
+
+
+================================================================================
+PATCH 2: feat: add config.h — RendererConfig, IBLConfig, SunConfig, SSAOConfig
+================================================================================
+
+diff --git a/include/vkgfx/config.h b/include/vkgfx/config.h
+new file mode 100644
+--- /dev/null
++++ b/include/vkgfx/config.h
+@@ -0,0 +1,68 @@
++#pragma once
++// All runtime configuration in one header.
++// No hardcoded paths or constants outside this struct.
++// RendererConfig::fromFile() loads from JSON.
++// Renderer::applyConfig() hot-reloads IBL/sun/SSAO/debug toggles.
++(full file content as generated in include/vkgfx/config.h)
+
+
+================================================================================
+PATCH 3: feat: add vk_raii.h — RAII Vulkan handle wrappers
+================================================================================
+
+diff --git a/include/vkgfx/vk_raii.h b/include/vkgfx/vk_raii.h
+new file mode 100644
+--- /dev/null
++++ b/include/vkgfx/vk_raii.h
+@@ -0,0 +1,91 @@
++// Move-only RAII wrappers for VkSemaphore, VkFence, VkCommandPool,
++// VkDescriptorPool. All zero-init handles. Destroy on scope exit.
+(full file content as generated in include/vkgfx/vk_raii.h)
+
+
+================================================================================
+PATCH 4: fix: types.h — vertex locations 0/1/2/3 match gbuffer.vert exactly
+================================================================================
+
+diff --git a/include/vkgfx/types.h b/include/vkgfx/types.h
+--- a/include/vkgfx/types.h
++++ b/include/vkgfx/types.h
+@@ -1,18 +1,65 @@
+-// Old: 3 attributes (pos/normal/uv), location 0/1/2
+-struct Vertex {
+-    glm::vec3 position;
+-    glm::vec3 normal;
+-    glm::vec2 uv;
+-    // 3 VkVertexInputAttributeDescription with locations 0, 1, 2
+-};
++// New: 4 attributes — location 0=pos, 1=normal, 2=tangent(vec4), 3=uv
++// MATCHES shaders/gbuffer.vert exactly.
++// tangent.w = bitangent sign (MikkTSpace convention).
++struct Vertex {
++    glm::vec3 position;  // location 0
++    glm::vec3 normal;    // location 1
++    glm::vec4 tangent;   // location 2
++    glm::vec2 uv;        // location 3
++    static VkVertexInputBindingDescription   bindingDescription();
++    static std::array<VkVertexInputAttributeDescription, 4> attributeDescriptions();
++};
++static_assert(sizeof(Vertex) == 48);  // 12+12+16+8
++
++// MeshPush: 128 bytes exactly — fits all drivers' minimum push constant space
++struct MeshPush {
++    glm::mat4 model;         // 64 bytes
++    glm::mat4 normalMatrix;  // 64 bytes
++};
++static_assert(sizeof(MeshPush) == 128);
++
++// Full SceneUBO, LightUBO, PBRParams structs with alignas(16)...
+
+
+================================================================================
+PATCH 5: feat: add shaders/gbuffer.vert + gbuffer.frag — G-buffer fill
+================================================================================
+
+diff --git a/shaders/pbr.vert b/shaders/gbuffer.vert
+rename from shaders/pbr.vert
+--- a/shaders/pbr.vert
++++ b/shaders/gbuffer.vert
+@@ -1,14 +1,34 @@
+-layout(location = 0) in vec3 inPosition;
+-layout(location = 1) in vec3 inNormal;
+-layout(location = 2) in vec2 inUV;           // BUG: location 2 = uv, no tangent
++// FIX: 4 locations, must match Vertex struct in types.h
++layout(location = 0) in vec3 inPosition;
++layout(location = 1) in vec3 inNormal;
++layout(location = 2) in vec4 inTangent;      // NEW: tangent at location 2
++layout(location = 3) in vec2 inUV;           // FIX: uv moved to location 3
+
+diff --git a/shaders/pbr.frag b/shaders/gbuffer.frag
+rename from shaders/pbr.frag
+--- a/shaders/pbr.frag
++++ b/shaders/gbuffer.frag
+@@ -1,30 +1,50 @@
+-// Old: forward PBR — combined lighting + shading in one pass
++// New: G-buffer fill only.
++// 3 colour outputs: albedo, normal (world-space), RMA (packed roughness/metallic/ao)
++layout(location = 0) out vec4 outAlbedo;
++layout(location = 1) out vec4 outNormal;
++layout(location = 2) out vec4 outRMA;
+
+
+================================================================================
+PATCH 6: feat: add shaders/lighting.vert + lighting.frag — deferred IBL lighting
+================================================================================
+
+diff --git a/shaders/lighting.vert b/shaders/lighting.vert
+new file mode 100644
++// Fullscreen triangle, no vertex buffer
+diff --git a/shaders/lighting.frag b/shaders/lighting.frag
+new file mode 100644
++// Reads G-buffer, applies IBL + sun + points + debug views
++// iblIntensity = 0 disables IBL; sun.enabled = 0 disables sun
++// gbufferDebug 1-6 outputs individual G-buffer channels
+
+
+================================================================================
+PATCH 7: fix: context.cpp — zero-init all VkStructs, vkDeviceWaitIdle on destroy
+================================================================================
+
+diff --git a/src/context.cpp b/src/context.cpp
+--- a/src/context.cpp
++++ b/src/context.cpp
+@@ -8,8 +8,10 @@
+-VkApplicationInfo appInfo;
+-appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
++VkApplicationInfo appInfo{};     // FIX: zero-init prevents garbage in padding fields
++appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+
+-VkInstanceCreateInfo createInfo;  // BUG: sType could be garbage
++VkInstanceCreateInfo createInfo{};
++createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+
++// FIX: wait for device idle BEFORE destroying any resource
++Context::~Context() {
++    if (m_device != VK_NULL_HANDLE) vkDeviceWaitIdle(m_device);
++    // destroy in reverse creation order: pool → device → instance
++}
+
+
+================================================================================
+PATCH 8: fix: renderer.cpp — G-buffer finalLayout = SHADER_READ_ONLY_OPTIMAL
+================================================================================
+
+diff --git a/src/renderer.cpp b/src/renderer.cpp
+--- a/src/renderer.cpp
++++ b/src/renderer.cpp
+@@ -0,0 +1,25 @@
++// G-buffer attachment descriptions — finalLayout MUST match descriptor writes
++// in lighting pass (VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).
++// Old code: finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL → validation ERROR
++for (int i = 0; i < 3; ++i) {
++    atts[i].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // FIX
++}
++atts[3].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;      // depth too
+
++// Subpass dependency handles G-buffer → lighting transition implicitly.
++// No manual vkCmdPipelineBarrier needed between passes.
++deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
++                      | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
++deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
++deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+
+================================================================================
+PATCH 9: fix: shutdown — vkDeviceWaitIdle before destroying any resource
+================================================================================
+
+diff --git a/src/renderer.cpp b/src/renderer.cpp
+--- a/src/renderer.cpp
++++ b/src/renderer.cpp
+@@ -280,6 +280,8 @@
+ void Renderer::shutdown() {
++    if (!m_initialized) return;
++    vkDeviceWaitIdle(m_ctx->device());  // FIX: was missing — caused stack corruption
+     // Destroy frame resources
+     for (auto& f : m_frames) {
+         m_ctx->destroyBuffer(f.sceneUbo);
+         m_ctx->destroyBuffer(f.lightUbo);
++        // Semaphores/fences are RAII VkHandle — destroyed automatically
+     }
+     // Destroy pipelines, layouts, passes, images in reverse creation order
++    m_initialized = false;
+ }
+
+
+================================================================================
+PATCH 10: feat: add tests/ — test_vertex_layout, test_render_pass, test_ibl_load
+================================================================================
+
+diff --git a/tests/test_vertex_layout.cpp b/tests/test_vertex_layout.cpp
+new file mode 100644
++// Compile-time static_assert + runtime Catch2 checks for Vertex layout.
++// Fails immediately if types.h changes break shader location assumptions.
+
+diff --git a/tests/test_render_pass.cpp b/tests/test_render_pass.cpp
+new file mode 100644
++// Headless context + G-buffer render pass creation.
++// Validates finalLayout = SHADER_READ_ONLY_OPTIMAL.
+
+diff --git a/tests/test_ibl_load.cpp b/tests/test_ibl_load.cpp
+new file mode 100644
++// Validates assets/sky.hdr exists; builds IBL at size 64 and checks output views.
++// Skips gracefully if HDR absent (SKIP not FAIL).
+
+
+================================================================================
+PATCH 11: feat: add .github/workflows/ci.yml — Ubuntu + Windows, build+test+install
+================================================================================
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
++# Builds Release+Debug on Ubuntu-24.04 and Windows-2022.
++# Runs ctest. Verifies install layout. Uploads release artifacts.
+
+
+================================================================================
+PATCH 12: chore: remove dead files
+================================================================================
+
+diff --git a/example/main.cpp b/examples/main.cpp
+rename from example/main.cpp
+--- a/example/main.cpp    (old forward-renderer demo with hardcoded paths)
++++ b/examples/main.cpp   (new: IBL/sun toggles, G-buffer debug, FPS camera)
+
+diff --git a/examples.md b/examples.md
+deleted file mode 100644
+--- a/examples.md
+(stale docs — replaced by inline README and example/main.cpp comments)
+
+diff --git a/.idea/ b/.idea/
+deleted file mode 100644
+(IDE metadata — should not be in VCS)

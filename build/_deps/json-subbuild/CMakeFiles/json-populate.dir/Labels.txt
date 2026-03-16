@@ -1,0 +1,14 @@
+# Target labels
+ json-populate
+# Source files and their labels
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/json-populate
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/5e523e32e551c945a933defd05d501de/json-populate.rule
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/a78c9f63839cd3d05f4822849e9a55ce/json-populate-complete.rule
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/95b013b9fcc9e079f4ac85066ea88d65/json-populate-build.rule
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/95b013b9fcc9e079f4ac85066ea88d65/json-populate-configure.rule
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/95b013b9fcc9e079f4ac85066ea88d65/json-populate-download.rule
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/95b013b9fcc9e079f4ac85066ea88d65/json-populate-install.rule
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/95b013b9fcc9e079f4ac85066ea88d65/json-populate-mkdir.rule
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/95b013b9fcc9e079f4ac85066ea88d65/json-populate-patch.rule
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/95b013b9fcc9e079f4ac85066ea88d65/json-populate-test.rule
+D:/Programming/vkgfx-refactor/build/_deps/json-subbuild/CMakeFiles/95b013b9fcc9e079f4ac85066ea88d65/json-populate-update.rule

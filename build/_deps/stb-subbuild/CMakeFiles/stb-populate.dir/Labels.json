@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/stb-populate"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/d5fa46713475f5c934dc671678a39acc/stb-populate.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/836fd20a1ee5412d13cb15886c7ad041/stb-populate-complete.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/6979d8ae09fb795f14c70cf92ff7f4a4/stb-populate-build.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/6979d8ae09fb795f14c70cf92ff7f4a4/stb-populate-configure.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/6979d8ae09fb795f14c70cf92ff7f4a4/stb-populate-download.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/6979d8ae09fb795f14c70cf92ff7f4a4/stb-populate-install.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/6979d8ae09fb795f14c70cf92ff7f4a4/stb-populate-mkdir.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/6979d8ae09fb795f14c70cf92ff7f4a4/stb-populate-patch.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/6979d8ae09fb795f14c70cf92ff7f4a4/stb-populate-test.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/6979d8ae09fb795f14c70cf92ff7f4a4/stb-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"stb-populate"
+		],
+		"name" : "stb-populate"
+	}
+}

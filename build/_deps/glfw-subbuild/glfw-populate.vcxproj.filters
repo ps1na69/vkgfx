@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\1ef1d0780321415456787f5b8d9ab58e\glfw-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\1ef1d0780321415456787f5b8d9ab58e\glfw-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\1ef1d0780321415456787f5b8d9ab58e\glfw-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\1ef1d0780321415456787f5b8d9ab58e\glfw-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\1ef1d0780321415456787f5b8d9ab58e\glfw-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\1ef1d0780321415456787f5b8d9ab58e\glfw-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\1ef1d0780321415456787f5b8d9ab58e\glfw-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\1ef1d0780321415456787f5b8d9ab58e\glfw-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\a805cb2bb61000d9a93385d13b685c8b\glfw-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\6abe72268b80c507f0caacd04fdf72f4\glfw-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\Programming\vkgfx-refactor\build\_deps\glfw-subbuild\CMakeFiles\glfw-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{B23294DA-6561-3DF9-A2D3-94A135029979}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

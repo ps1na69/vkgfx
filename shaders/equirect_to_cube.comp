@@ -1,0 +1,43 @@
+#version 450
+// shaders/equirect_to_cube.comp
+// Converts equirectangular HDR to a cubemap face.
+// Dispatch: (faceSize/16, faceSize/16, 6)
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D equirectMap;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly imageCube outCube;
+
+const vec2 INV_ATAN = vec2(0.1591, 0.3183);
+
+vec3 faceDir(uint face, vec2 uv) {
+    // uv in [-1, 1]
+    switch(face) {
+        case 0: return normalize(vec3( 1, -uv.y, -uv.x));  // +X
+        case 1: return normalize(vec3(-1, -uv.y,  uv.x));  // -X
+        case 2: return normalize(vec3( uv.x,  1,  uv.y));  // +Y
+        case 3: return normalize(vec3( uv.x, -1, -uv.y));  // -Y
+        case 4: return normalize(vec3( uv.x, -uv.y,  1));  // +Z
+        case 5: return normalize(vec3(-uv.x, -uv.y, -1));  // -Z
+    }
+    return vec3(0);
+}
+
+vec2 sampleEquirect(vec3 dir) {
+    vec2 uv = vec2(atan(dir.z, dir.x), asin(dir.y));
+    uv *= INV_ATAN;
+    uv += 0.5;
+    return uv;
+}
+
+void main() {
+    ivec3 id   = ivec3(gl_GlobalInvocationID);
+    ivec2 size = imageSize(outCube).xy;
+    if (id.x >= size.x || id.y >= size.y) return;
+
+    vec2  uv   = (vec2(id.xy) + 0.5) / vec2(size) * 2.0 - 1.0;
+    vec3  dir  = faceDir(uint(id.z), uv);
+    vec2  eq   = sampleEquirect(dir);
+    vec4  col  = texture(equirectMap, eq);
+    imageStore(outCube, id, col);
+}

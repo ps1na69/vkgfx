@@ -1,0 +1,79 @@
+// src/scene.cpp
+#include <vkgfx/scene.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+namespace vkgfx {
+
+// ── DirectionalLight ──────────────────────────────────────────────────────────
+
+DirectionalLight& DirectionalLight::setDirection(float x, float y, float z) {
+    m_direction = glm::normalize(glm::vec3(x, y, z));
+    return *this;
+}
+DirectionalLight& DirectionalLight::setDirection(glm::vec3 d) {
+    m_direction = glm::normalize(d);
+    return *this;
+}
+DirectionalLight& DirectionalLight::setColor(float r, float g, float b) {
+    m_color = {r, g, b};
+    return *this;
+}
+DirectionalLight& DirectionalLight::setIntensity(float v) { m_intensity = v; return *this; }
+DirectionalLight& DirectionalLight::setEnabled(bool v)    { m_enabled   = v; return *this; }
+
+// ── PointLight ────────────────────────────────────────────────────────────────
+
+PointLight& PointLight::setPosition(glm::vec3 p)           { m_position  = p; return *this; }
+PointLight& PointLight::setColor(float r, float g, float b) { m_color = {r, g, b}; return *this; }
+PointLight& PointLight::setIntensity(float v)              { m_intensity = v; return *this; }
+PointLight& PointLight::setRadius(float r)                 { m_radius    = r; return *this; }
+PointLight& PointLight::setEnabled(bool v)                 { m_enabled   = v; return *this; }
+
+// ── Scene ─────────────────────────────────────────────────────────────────────
+
+std::vector<Mesh*> Scene::visibleMeshes() const {
+    if (!m_camera) {
+        std::vector<Mesh*> all;
+        all.reserve(m_meshes.size());
+        for (auto& m : m_meshes) all.push_back(m.get());
+        return all;
+    }
+    Frustum fr = m_camera->frustum();
+    std::vector<Mesh*> visible;
+    for (auto& mesh : m_meshes) {
+        glm::mat4  model   = mesh->modelMatrix();
+        glm::vec3  center  = glm::vec3(model * glm::vec4(mesh->aabb().center(), 1.f));
+        glm::mat3  m3      = glm::mat3(model);
+        glm::vec3  extents = glm::abs(m3[0]) * mesh->aabb().extents().x
+                           + glm::abs(m3[1]) * mesh->aabb().extents().y
+                           + glm::abs(m3[2]) * mesh->aabb().extents().z;
+        if (fr.intersects(center, extents))
+            visible.push_back(mesh.get());
+    }
+    return visible;
+}
+
+void Scene::fillLightUBO(LightUBO& ubo, float iblIntensity, uint32_t gbufferDebug) const {
+    ubo = LightUBO{};
+
+    if (m_dirLight) {
+        ubo.sun.direction = glm::vec4(m_dirLight->direction(), 0.f);
+        ubo.sun.color     = glm::vec4(m_dirLight->color(), m_dirLight->intensity());
+        ubo.sun.enabled   = m_dirLight->enabled() ? 1u : 0u;
+    }
+
+    uint32_t count = 0;
+    for (auto& pl : m_pointLights) {
+        if (!pl->enabled() || count >= MAX_POINT_LIGHTS) continue;
+        auto& d    = ubo.points[count++];
+        d.position = glm::vec4(pl->position(), 0.f);
+        d.color    = glm::vec4(pl->color(), pl->intensity());
+        d.radius   = pl->radius();
+    }
+    ubo.pointCount   = count;
+    ubo.iblIntensity = iblIntensity;
+    ubo.gbufferDebug = gbufferDebug;
+}
+
+} // namespace vkgfx

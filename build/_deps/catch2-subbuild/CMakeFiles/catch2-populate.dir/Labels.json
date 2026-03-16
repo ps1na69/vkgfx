@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/catch2-populate"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/0c9668bf2eead0736ba169613b64879e/catch2-populate.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/c912a1b0e7cb33a09d71ce4b09616470/catch2-populate-complete.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/1af6b0aaff17fd55028bf6271e6bd080/catch2-populate-build.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/1af6b0aaff17fd55028bf6271e6bd080/catch2-populate-configure.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/1af6b0aaff17fd55028bf6271e6bd080/catch2-populate-download.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/1af6b0aaff17fd55028bf6271e6bd080/catch2-populate-install.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/1af6b0aaff17fd55028bf6271e6bd080/catch2-populate-mkdir.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/1af6b0aaff17fd55028bf6271e6bd080/catch2-populate-patch.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/1af6b0aaff17fd55028bf6271e6bd080/catch2-populate-test.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx-refactor/build/_deps/catch2-subbuild/CMakeFiles/1af6b0aaff17fd55028bf6271e6bd080/catch2-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"catch2-populate"
+		],
+		"name" : "catch2-populate"
+	}
+}

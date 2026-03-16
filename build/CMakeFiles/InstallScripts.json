@@ -1,0 +1,18 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/Programming/vkgfx-refactor/build/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/_deps/glfw-build/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/_deps/glfw-build/src/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/_deps/glm-build/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/_deps/glm-build/glm/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/_deps/vma-build/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/_deps/json-build/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/_deps/tinyobjloader-build/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/examples/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/tests/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/_deps/catch2-build/cmake_install.cmake",
+		"D:/Programming/vkgfx-refactor/build/_deps/catch2-build/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

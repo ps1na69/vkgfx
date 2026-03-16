@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\_deps\tinyobjloader-subbuild\CMakeFiles\bcba355f0c898c8803340d6faba337d7\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{720625F1-CF7D-34F4-85FF-B5B42601C249}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
