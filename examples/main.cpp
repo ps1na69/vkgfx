@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
 
     // ── Scene ─────────────────────────────────────────────────────────────────
     Camera cam;
-    cam.setPosition({0.f, 0.f, -4.f}).setFov(60.f);
+    cam.setPosition({0.f, 0.f, -4.f}).setFov(90.f);
 
     Scene scene;
     scene.setCamera(&cam);
