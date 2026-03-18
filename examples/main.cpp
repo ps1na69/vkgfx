@@ -204,8 +204,11 @@ int main(int argc, char** argv) {
         renderer.render(scene);
     }
 
-    // Free GPU buffers for all meshes before renderer shutdown.
-    // Renderer must still be alive (device valid) when destroy() is called.
+    // Wait for GPU to finish all in-flight work before freeing mesh buffers.
+    // renderer.shutdown() also calls vkDeviceWaitIdle, but mesh destroy must
+    // happen after idle too — doing it here ensures correct order.
+    vkDeviceWaitIdle(renderer.context().device());
+
     for (auto& s : spheres)
         s->destroy(renderer.context());
     spheres.clear();

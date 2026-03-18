@@ -705,17 +705,20 @@ void Renderer::initPerFrameResources() {
     vkAllocateCommandBuffers(m_ctx->device(), &ai, cmds.data());
 
     // Per-frame-slot acquire semaphores.
-    // The fence wait before acquireNextImage guarantees: the previous submit for
-    // this frame slot has completed, meaning its wait on this semaphore already
-    // consumed it → semaphore is back to unsignaled when we reuse it here.
     m_acquireSemaphores.clear();
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         m_acquireSemaphores.push_back(makeSemaphore(m_ctx->device()));
 
+    // Per-swapchain-image renderFinished semaphores.
+    // Each swapchain image has its own semaphore so present for image N never
+    // conflicts with a pending present for a different image using the same slot.
+    m_renderFinishedSems.clear();
+    for (uint32_t i = 0; i < m_swapchain->imageCount(); ++i)
+        m_renderFinishedSems.push_back(makeSemaphore(m_ctx->device()));
+
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         auto& f          = m_frames[i];
         f.cmd            = cmds[i];
-        f.renderFinished = makeSemaphore(m_ctx->device());
         f.inFlight       = makeFence(m_ctx->device(), true);
 
         f.sceneUbo        = m_ctx->allocateBuffer(sizeof(SceneUBO),  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
@@ -953,12 +956,96 @@ void Renderer::rebuild(const RendererConfig& cfg) {
     m_initialized = true;
 }
 
+// ── uploadMeshMaterials ───────────────────────────────────────────────────────
+// Called from render() before the first draw: ensures every mesh that has a
+// PBRMaterial gets a valid VkDescriptorSet.  Safe to call every frame — skips
+// meshes whose material already has a set.
+
+void Renderer::uploadMeshMaterials(Scene& scene) {
+    for (auto& meshPtr : scene.meshes()) {
+        PBRMaterial* mat = meshPtr->material();
+        if (!mat || mat->descriptorSet() != VK_NULL_HANDLE) continue;
+
+        // Allocate set=1 for this material
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = m_descriptorPool.get();
+        dsai.descriptorSetCount = 1;
+        dsai.pSetLayouts        = &m_materialSetLayout;
+        VkDescriptorSet ds = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(m_ctx->device(), &dsai, &ds) != VK_SUCCESS) {
+            std::cerr << "[vkgfx] Failed to allocate material descriptor set\n";
+            continue;
+        }
+        mat->setDescriptorSet(ds);
+
+        // Build fallback image infos (used when texture slot is null)
+        VkDescriptorImageInfo fallbacks[3]{};
+        fallbacks[0] = {m_fallbackSampler, m_fallbackWhite.view,  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        fallbacks[1] = {m_fallbackSampler, m_fallbackNormal.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        fallbacks[2] = {m_fallbackSampler, m_fallbackRMA.view,    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+        // Texture samplers (bindings 0, 1, 2) — use real texture if set, else fallback
+        std::shared_ptr<Texture> texSlots[3] = {
+            mat->albedoTex(), mat->normalTex(), mat->rmaTex()
+        };
+        VkDescriptorImageInfo imgInfos[3]{};
+        VkWriteDescriptorSet  tw[3]{};
+        for (uint32_t b = 0; b < 3; ++b) {
+            if (texSlots[b] && texSlots[b]->valid()) {
+                imgInfos[b] = {texSlots[b]->sampler(),
+                               texSlots[b]->view(),
+                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            } else {
+                imgInfos[b] = fallbacks[b];
+            }
+            tw[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            tw[b].dstSet          = ds;
+            tw[b].dstBinding      = b;
+            tw[b].descriptorCount = 1;
+            tw[b].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            tw[b].pImageInfo      = &imgInfos[b];
+        }
+        vkUpdateDescriptorSets(m_ctx->device(), 3, tw, 0, nullptr);
+
+        // Binding 3: PBRParams UBO — create a persistent per-material UBO
+        // Store it on the material so we can update it later if needed.
+        // For now upload the current params once.
+        AllocatedBuffer paramsUbo = m_ctx->allocateBuffer(sizeof(PBRParams),
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+        {
+            void* m = nullptr;
+            vmaMapMemory(m_ctx->vma(),
+                static_cast<VmaAllocation>(paramsUbo.allocation), &m);
+            std::memcpy(m, &mat->params(), sizeof(PBRParams));
+            vmaUnmapMemory(m_ctx->vma(),
+                static_cast<VmaAllocation>(paramsUbo.allocation));
+        }
+        // Track this buffer so we can free it at shutdown
+        m_materialUbos.push_back(paramsUbo);
+
+        VkDescriptorBufferInfo pbi{paramsUbo.buffer, 0, sizeof(PBRParams)};
+        VkWriteDescriptorSet pw{};
+        pw.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        pw.dstSet          = ds;
+        pw.dstBinding      = 3;
+        pw.descriptorCount = 1;
+        pw.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        pw.pBufferInfo     = &pbi;
+        vkUpdateDescriptorSets(m_ctx->device(), 1, &pw, 0, nullptr);
+    }
+}
+
 // ── render ────────────────────────────────────────────────────────────────────
 
 void Renderer::render(Scene& scene) {
     auto& f = m_frames[m_frameIdx];
 
     vkWaitForFences(m_ctx->device(), 1, f.inFlight.ptr(), VK_TRUE, UINT64_MAX);
+
+    // Allocate and write material descriptor sets for any new meshes.
+    // Safe here: fence wait above guarantees GPU is not reading old sets.
+    uploadMeshMaterials(scene);
 
     // Per-frame-slot acquire semaphore. The fence wait above guarantees the
     // previous submit for this frame slot has completed → semaphore is unsignaled.
@@ -1147,10 +1234,15 @@ void Renderer::render(Scene& scene) {
     si.waitSemaphoreCount   = 1; si.pWaitSemaphores   = &acquireSem;
     si.pWaitDstStageMask    = &waitStage;
     si.commandBufferCount   = 1; si.pCommandBuffers   = &f.cmd;
-    si.signalSemaphoreCount = 1; si.pSignalSemaphores = f.renderFinished.ptr();
+    // Signal renderFinished indexed by swapchain image, not frame slot.
+    // This guarantees the semaphore is not reused while that image is still
+    // queued for presentation (image 0 semaphore is only reused when image 0
+    // is acquired again, which requires it to have left the presentation queue).
+    VkSemaphore renderDoneSem = m_renderFinishedSems[m_swapIdx].get();
+    si.signalSemaphoreCount = 1; si.pSignalSemaphores = &renderDoneSem;
     vkQueueSubmit(m_ctx->graphicsQ(), 1, &si, f.inFlight.get());
 
-    res = m_swapchain->present(f.renderFinished.get(), m_swapIdx);
+    res = m_swapchain->present(renderDoneSem, m_swapIdx);
     if (needsRecreate || res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
         m_swapchain->recreate();
 
@@ -1203,8 +1295,14 @@ void Renderer::shutdown() {
     m_ctx->destroyImage(m_fallbackRMA);
 
     m_ibl->destroy();
+
+    for (auto& buf : m_materialUbos)
+        m_ctx->destroyBuffer(buf);
+    m_materialUbos.clear();
+
     m_descriptorPool.reset();
-    m_acquireSemaphores.clear();  // VkHandle destructors call vkDestroySemaphore
+    m_acquireSemaphores.clear();
+    m_renderFinishedSems.clear();
 
     m_initialized = false;
 }

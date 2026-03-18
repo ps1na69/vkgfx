@@ -47,6 +47,7 @@ private:
     void initPerFrameResources();
     void initIBL();
     void initDefaultTextures(); // 1x1 fallback textures for default material set
+    void uploadMeshMaterials(Scene& scene); // allocate+write material descriptors
     void validateAssets();
 
     // ── Per-frame ─────────────────────────────────────────────────────────────
@@ -106,7 +107,6 @@ private:
     VkHandle<VkDescriptorPool> m_descriptorPool;
 
     struct PerFrame {
-        VkHandle<VkSemaphore> renderFinished;
         VkHandle<VkFence>     inFlight;
         VkCommandBuffer       cmd = VK_NULL_HANDLE;
 
@@ -125,9 +125,17 @@ private:
 
     std::array<PerFrame, MAX_FRAMES_IN_FLIGHT> m_frames{};
 
-    // Per-swapchain-image acquire semaphores — avoids reuse while still pending.
-    // Sized after swapchain creation; indexed by swapchain image index.
+    // Per-frame-slot acquire semaphores (fence wait before acquire guarantees
+    // the previous use of this slot's semaphore has been consumed).
     std::vector<VkHandle<VkSemaphore>> m_acquireSemaphores;
+
+    // Per-swapchain-image renderFinished semaphores.
+    // Signal: indexed by m_swapIdx (known after acquire).
+    // Wait (present): same index — avoids reuse while the image is still queued.
+    std::vector<VkHandle<VkSemaphore>> m_renderFinishedSems;
+
+    // Per-material param UBOs — allocated in uploadMeshMaterials(), freed in shutdown()
+    std::vector<AllocatedBuffer> m_materialUbos;
     uint32_t m_frameIdx    = 0;
     uint32_t m_swapIdx     = 0;
     bool     m_initialized = false;
