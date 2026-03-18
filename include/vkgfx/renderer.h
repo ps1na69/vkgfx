@@ -46,6 +46,7 @@ private:
     void initTonemapPass();
     void initPerFrameResources();
     void initIBL();
+    void initDefaultTextures(); // 1x1 fallback textures for default material set
     void validateAssets();
 
     // ── Per-frame ─────────────────────────────────────────────────────────────
@@ -94,17 +95,24 @@ private:
     // Shared samplers
     VkSampler m_gbufferSampler = VK_NULL_HANDLE;
     VkSampler m_hdrSampler     = VK_NULL_HANDLE;
+    VkSampler m_fallbackSampler= VK_NULL_HANDLE;
+
+    // 1x1 fallback textures for defaultMaterialSet — valid descriptors that satisfy
+    // the pipeline layout even when no real material textures are assigned.
+    AllocatedImage m_fallbackWhite{};   // albedo fallback (1,1,1,1)
+    AllocatedImage m_fallbackNormal{};  // normal fallback (0.5,0.5,1.0 = flat normal)
+    AllocatedImage m_fallbackRMA{};     // RMA fallback (0.5 roughness, 0 metallic, 1 ao)
 
     VkHandle<VkDescriptorPool> m_descriptorPool;
 
     struct PerFrame {
-        VkHandle<VkSemaphore> imageAvailable;
         VkHandle<VkSemaphore> renderFinished;
         VkHandle<VkFence>     inFlight;
         VkCommandBuffer       cmd = VK_NULL_HANDLE;
 
         // Descriptor sets allocated once, updated as needed
         VkDescriptorSet gbufferSceneSet    = VK_NULL_HANDLE; // set=0 gbuffer pass
+        VkDescriptorSet defaultMaterialSet = VK_NULL_HANDLE; // set=1 gbuffer fallback
         VkDescriptorSet lightingGbufferSet = VK_NULL_HANDLE; // set=0 lighting pass
         VkDescriptorSet lightingSceneSet   = VK_NULL_HANDLE; // set=1 lighting pass
         VkDescriptorSet iblSet             = VK_NULL_HANDLE; // set=2 lighting pass
@@ -112,9 +120,14 @@ private:
 
         AllocatedBuffer sceneUbo{};
         AllocatedBuffer lightUbo{};
+        AllocatedBuffer defaultParamsUbo{}; // PBRParams with all defaults for fallback set
     };
 
     std::array<PerFrame, MAX_FRAMES_IN_FLIGHT> m_frames{};
+
+    // Per-swapchain-image acquire semaphores — avoids reuse while still pending.
+    // Sized after swapchain creation; indexed by swapchain image index.
+    std::vector<VkHandle<VkSemaphore>> m_acquireSemaphores;
     uint32_t m_frameIdx    = 0;
     uint32_t m_swapIdx     = 0;
     bool     m_initialized = false;

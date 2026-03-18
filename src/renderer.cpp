@@ -72,6 +72,7 @@ Renderer::Renderer(Window& window, RendererConfig cfg)
 
     validateAssets();
     initDescriptorPools();
+    initDefaultTextures();  // must be before initPerFrameResources (uses fallback textures)
     initGBuffer();
     initLightingPass();
     initTonemapPass();
@@ -605,6 +606,79 @@ void Renderer::initTonemapPass() {
     vkDestroyShaderModule(m_ctx->device(), frag, nullptr);
 }
 
+// ── initDefaultTextures ───────────────────────────────────────────────────────
+// Creates 1x1 solid-color images used as fallback descriptors.
+// Every binding in defaultMaterialSet must be written with valid image data.
+
+void Renderer::initDefaultTextures() {
+    auto upload1x1 = [&](uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> AllocatedImage {
+        AllocatedImage img = m_ctx->allocateImage({1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+
+        const uint8_t px[4] = {r, g, b, a};
+        AllocatedBuffer staging = m_ctx->allocateBuffer(4,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+        void* mapped = nullptr;
+        vmaMapMemory(m_ctx->vma(), static_cast<VmaAllocation>(staging.allocation), &mapped);
+        std::memcpy(mapped, px, 4);
+        vmaUnmapMemory(m_ctx->vma(), static_cast<VmaAllocation>(staging.allocation));
+
+        VkCommandBuffer cmd = m_ctx->beginOneShot();
+
+        VkImageMemoryBarrier b1{};
+        b1.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b1.oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
+        b1.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b1.srcAccessMask    = 0;
+        b1.dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b1.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b1.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b1.image            = img.image;
+        b1.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b1);
+
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent      = {1, 1, 1};
+        vkCmdCopyBufferToImage(cmd, staging.buffer, img.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        VkImageMemoryBarrier b2 = b1;
+        b2.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b2.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b2.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b2);
+
+        m_ctx->endOneShot(cmd);
+        m_ctx->destroyBuffer(staging);
+
+        img.view = m_ctx->createImageView(img.image, VK_FORMAT_R8G8B8A8_UNORM,
+                                           VK_IMAGE_ASPECT_COLOR_BIT);
+        return img;
+    };
+
+    // albedo fallback: white
+    m_fallbackWhite  = upload1x1(255, 255, 255, 255);
+    // normal fallback: (0.5, 0.5, 1.0) = flat normal pointing +Z in tangent space
+    m_fallbackNormal = upload1x1(128, 128, 255, 255);
+    // RMA fallback: roughness=0.5 (128), metallic=0 (0), ao=1 (255)
+    m_fallbackRMA    = upload1x1(128,   0, 255, 255);
+
+    // Shared nearest-linear sampler for fallback textures
+    VkSamplerCreateInfo sci{};
+    sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sci.magFilter    = VK_FILTER_LINEAR;
+    sci.minFilter    = VK_FILTER_LINEAR;
+    sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.maxLod       = 1.f;
+    vkCreateSampler(m_ctx->device(), &sci, nullptr, &m_fallbackSampler);
+}
+
 // ── initPerFrameResources ─────────────────────────────────────────────────────
 
 void Renderer::initPerFrameResources() {
@@ -630,15 +704,35 @@ void Renderer::initPerFrameResources() {
     std::array<VkCommandBuffer, MAX_FRAMES_IN_FLIGHT> cmds{};
     vkAllocateCommandBuffers(m_ctx->device(), &ai, cmds.data());
 
+    // Per-frame-slot acquire semaphores.
+    // The fence wait before acquireNextImage guarantees: the previous submit for
+    // this frame slot has completed, meaning its wait on this semaphore already
+    // consumed it → semaphore is back to unsignaled when we reuse it here.
+    m_acquireSemaphores.clear();
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        m_acquireSemaphores.push_back(makeSemaphore(m_ctx->device()));
+
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         auto& f          = m_frames[i];
         f.cmd            = cmds[i];
-        f.imageAvailable = makeSemaphore(m_ctx->device());
         f.renderFinished = makeSemaphore(m_ctx->device());
         f.inFlight       = makeFence(m_ctx->device(), true);
 
-        f.sceneUbo = m_ctx->allocateBuffer(sizeof(SceneUBO),  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
-        f.lightUbo = m_ctx->allocateBuffer(sizeof(LightUBO),  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+        f.sceneUbo        = m_ctx->allocateBuffer(sizeof(SceneUBO),  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+        f.lightUbo        = m_ctx->allocateBuffer(sizeof(LightUBO),  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+        f.defaultParamsUbo= m_ctx->allocateBuffer(sizeof(PBRParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+        // Write default PBRParams (all zeros / defaults) — albedo=white, roughness=0.5
+        {
+            PBRParams defaults{};
+            defaults.albedo    = {1.f, 1.f, 1.f, 1.f};
+            defaults.roughness = 0.5f;
+            defaults.metallic  = 0.0f;
+            defaults.ao        = 1.0f;
+            void* m = nullptr;
+            vmaMapMemory(m_ctx->vma(), static_cast<VmaAllocation>(f.defaultParamsUbo.allocation), &m);
+            std::memcpy(m, &defaults, sizeof(PBRParams));
+            vmaUnmapMemory(m_ctx->vma(), static_cast<VmaAllocation>(f.defaultParamsUbo.allocation));
+        }
 
         // Allocate descriptor sets ─────────────────────────────────────────────
         // gbuffer scene set (set=0 in G-buffer pass)
@@ -649,6 +743,45 @@ void Renderer::initPerFrameResources() {
             dsai.descriptorSetCount = 1;
             dsai.pSetLayouts        = &m_gbufferSetLayout;
             vkAllocateDescriptorSets(m_ctx->device(), &dsai, &f.gbufferSceneSet);
+        }
+        // default material set (set=1 in G-buffer pass) — always bound as fallback.
+        // Must be fully written: Vulkan validation errors if any binding is never updated.
+        {
+            VkDescriptorSetAllocateInfo dsai{};
+            dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            dsai.descriptorPool     = m_descriptorPool.get();
+            dsai.descriptorSetCount = 1;
+            dsai.pSetLayouts        = &m_materialSetLayout;
+            vkAllocateDescriptorSets(m_ctx->device(), &dsai, &f.defaultMaterialSet);
+
+            // Write fallback descriptors using the shared 1×1 solid-color textures
+            // created once in initDefaultTextures().
+            VkDescriptorImageInfo texInfos[3]{};
+            texInfos[0] = {m_fallbackSampler, m_fallbackWhite.view,  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            texInfos[1] = {m_fallbackSampler, m_fallbackNormal.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            texInfos[2] = {m_fallbackSampler, m_fallbackRMA.view,    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+            VkWriteDescriptorSet tw[3]{};
+            for (uint32_t b = 0; b < 3; ++b) {
+                tw[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                tw[b].dstSet          = f.defaultMaterialSet;
+                tw[b].dstBinding      = b;
+                tw[b].descriptorCount = 1;
+                tw[b].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                tw[b].pImageInfo      = &texInfos[b];
+            }
+            vkUpdateDescriptorSets(m_ctx->device(), 3, tw, 0, nullptr);
+
+            // Binding 3: PBRParams UBO — use per-frame default params buffer
+            VkDescriptorBufferInfo pbi{f.defaultParamsUbo.buffer, 0, sizeof(PBRParams)};
+            VkWriteDescriptorSet pw{};
+            pw.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            pw.dstSet          = f.defaultMaterialSet;
+            pw.dstBinding      = 3;
+            pw.descriptorCount = 1;
+            pw.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            pw.pBufferInfo     = &pbi;
+            vkUpdateDescriptorSets(m_ctx->device(), 1, &pw, 0, nullptr);
         }
         // lighting sets (set=0 and set=1)
         {
@@ -811,6 +944,7 @@ void Renderer::rebuild(const RendererConfig& cfg) {
     shutdown();
     m_cfg = cfg;
     initDescriptorPools();
+    initDefaultTextures();  // must be before initPerFrameResources (uses fallback textures)
     initGBuffer();
     initLightingPass();
     initTonemapPass();
@@ -826,11 +960,19 @@ void Renderer::render(Scene& scene) {
 
     vkWaitForFences(m_ctx->device(), 1, f.inFlight.ptr(), VK_TRUE, UINT64_MAX);
 
-    VkResult res = m_swapchain->acquireNext(f.imageAvailable.get(), m_swapIdx);
-    if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR) {
+    // Per-frame-slot acquire semaphore. The fence wait above guarantees the
+    // previous submit for this frame slot has completed → semaphore is unsignaled.
+    VkSemaphore acquireSem = m_acquireSemaphores[m_frameIdx].get();
+    VkResult res = m_swapchain->acquireNext(acquireSem, m_swapIdx);
+    if (res == VK_ERROR_OUT_OF_DATE_KHR) {
+        // Driver MAY have signaled acquireSem. Recreate it so next acquire is clean.
+        m_acquireSemaphores[m_frameIdx] = makeSemaphore(m_ctx->device());
         m_swapchain->recreate();
         return;
     }
+    // VK_SUBOPTIMAL_KHR: continue this frame (semaphore was signaled normally),
+    // recreate swapchain after present.
+    bool needsRecreate = (res == VK_SUBOPTIMAL_KHR);
 
     vkResetFences(m_ctx->device(), 1, f.inFlight.ptr());
 
@@ -906,6 +1048,11 @@ void Renderer::render(Scene& scene) {
         vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_gbufferLayout, 0, 1, &f.gbufferSceneSet, 0, nullptr);
 
+        // set=1: bind default material fallback so set=1 is always bound.
+        // Meshes with real material descriptors rebind below.
+        vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_gbufferLayout, 1, 1, &f.defaultMaterialSet, 0, nullptr);
+
         for (Mesh* mesh : scene.visibleMeshes()) {
             MeshPush push{};
             push.model        = mesh->modelMatrix();
@@ -915,7 +1062,6 @@ void Renderer::render(Scene& scene) {
 
             if (mesh->material() && mesh->material()->descriptorSet() != VK_NULL_HANDLE) {
                 VkDescriptorSet matSet = mesh->material()->descriptorSet();
-                // set=1: material
                 vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     m_gbufferLayout, 1, 1, &matSet, 0, nullptr);
             }
@@ -998,14 +1144,14 @@ void Renderer::render(Scene& scene) {
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo si{};
     si.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    si.waitSemaphoreCount   = 1; si.pWaitSemaphores   = f.imageAvailable.ptr();
+    si.waitSemaphoreCount   = 1; si.pWaitSemaphores   = &acquireSem;
     si.pWaitDstStageMask    = &waitStage;
     si.commandBufferCount   = 1; si.pCommandBuffers   = &f.cmd;
     si.signalSemaphoreCount = 1; si.pSignalSemaphores = f.renderFinished.ptr();
     vkQueueSubmit(m_ctx->graphicsQ(), 1, &si, f.inFlight.get());
 
     res = m_swapchain->present(f.renderFinished.get(), m_swapIdx);
-    if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
+    if (needsRecreate || res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
         m_swapchain->recreate();
 
     m_frameIdx = (m_frameIdx + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -1020,6 +1166,7 @@ void Renderer::shutdown() {
     for (auto& f : m_frames) {
         m_ctx->destroyBuffer(f.sceneUbo);
         m_ctx->destroyBuffer(f.lightUbo);
+        m_ctx->destroyBuffer(f.defaultParamsUbo);
         // Semaphores/fences are RAII VkHandles — destroyed automatically
     }
 
@@ -1045,14 +1192,19 @@ void Renderer::shutdown() {
     td(m_iblSetLayout,      vkDestroyDescriptorSetLayout);
     td(m_tonemapSetLayout,  vkDestroyDescriptorSetLayout);
 
-    td(m_hdrSampler,     vkDestroySampler);
-    td(m_gbufferSampler, vkDestroySampler);
+    td(m_hdrSampler,      vkDestroySampler);
+    td(m_gbufferSampler,  vkDestroySampler);
+    td(m_fallbackSampler, vkDestroySampler);
 
     for (auto& img : m_gbuffer) m_ctx->destroyImage(img);
     m_ctx->destroyImage(m_hdrTarget);
+    m_ctx->destroyImage(m_fallbackWhite);
+    m_ctx->destroyImage(m_fallbackNormal);
+    m_ctx->destroyImage(m_fallbackRMA);
 
     m_ibl->destroy();
     m_descriptorPool.reset();
+    m_acquireSemaphores.clear();  // VkHandle destructors call vkDestroySemaphore
 
     m_initialized = false;
 }

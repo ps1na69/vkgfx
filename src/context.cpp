@@ -56,10 +56,12 @@ Context::Context(const ContextConfig& cfg) : m_cfg(cfg) {
 
 Context::~Context() {
     if (m_device != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(m_device);   // FIX: wait before destroying anything
+        vkDeviceWaitIdle(m_device);
     }
 
-    // m_graphicsPool is a VkHandle — destroys itself here
+    // Destroy command pool BEFORE device — explicit reset so the VkHandle
+    // destructor does not fire after vkDestroyDevice below.
+    m_graphicsPool.reset();
 
     if (m_vma) {
         vmaDestroyAllocator(m_vma);

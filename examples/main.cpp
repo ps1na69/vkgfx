@@ -118,22 +118,25 @@ int main(int argc, char** argv) {
 
     // ── Scene ─────────────────────────────────────────────────────────────────
     Camera cam;
-    cam.setPosition({0.f, 0.f, -4.f}).setFov(90.f);
+    cam.setPosition({0.f, 0.f, -4.f}).setFov(60.f);
 
     Scene scene;
     scene.setCamera(&cam);
 
     // 4x4 sphere grid: roughness increases right, metallic increases up
+    // Keep handles so we can explicitly free GPU resources before shutdown.
+    std::vector<std::shared_ptr<vkgfx::Mesh>> spheres;
     for (int row = 0; row < 4; ++row) {
         for (int col = 0; col < 4; ++col) {
-            auto sphere = Mesh::createSphere(0.3f, 32, 32, renderer.context());
+            auto sphere = vkgfx::Mesh::createSphere(0.3f, 32, 32, renderer.context());
             sphere->setPosition({(col - 1.5f) * 0.9f,
                                   (row - 1.5f) * 0.9f, 0.f});
-            auto mat = std::make_shared<PBRMaterial>();
+            auto mat = std::make_shared<vkgfx::PBRMaterial>();
             mat->setAlbedo(0.8f, 0.3f, 0.2f)
                 .setRoughness(static_cast<float>(col) / 3.f)
                 .setMetallic (static_cast<float>(row) / 3.f);
             sphere->setMaterial(mat);
+            spheres.push_back(sphere);
             scene.add(sphere);
         }
     }
@@ -200,6 +203,12 @@ int main(int argc, char** argv) {
 
         renderer.render(scene);
     }
+
+    // Free GPU buffers for all meshes before renderer shutdown.
+    // Renderer must still be alive (device valid) when destroy() is called.
+    for (auto& s : spheres)
+        s->destroy(renderer.context());
+    spheres.clear();
 
     renderer.shutdown();
     std::cout << "[example] clean exit\n";

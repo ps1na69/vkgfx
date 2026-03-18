@@ -1,24 +1,25 @@
 #version 450
 // shaders/irradiance.comp
-// Convolves an environment cube to produce the irradiance cube.
+// Convolves environment cube to produce irradiance cube (diffuse IBL).
+// Uses image2DArray for storage — imageCube is not a valid storage image type.
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform samplerCube envCube;
-layout(set = 0, binding = 1, rgba32f) uniform writeonly imageCube outIrr;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2DArray outIrr;
 
 const float PI = 3.14159265359;
 
 vec3 faceDir(uint face, vec2 uv) {
     switch(face) {
-        case 0: return normalize(vec3( 1, -uv.y, -uv.x));
-        case 1: return normalize(vec3(-1, -uv.y,  uv.x));
-        case 2: return normalize(vec3( uv.x,  1,  uv.y));
-        case 3: return normalize(vec3( uv.x, -1, -uv.y));
-        case 4: return normalize(vec3( uv.x, -uv.y,  1));
-        case 5: return normalize(vec3(-uv.x, -uv.y, -1));
+        case 0: return normalize(vec3( 1.0, -uv.y, -uv.x));
+        case 1: return normalize(vec3(-1.0, -uv.y,  uv.x));
+        case 2: return normalize(vec3( uv.x,  1.0,  uv.y));
+        case 3: return normalize(vec3( uv.x, -1.0, -uv.y));
+        case 4: return normalize(vec3( uv.x, -uv.y,  1.0));
+        case 5: return normalize(vec3(-uv.x, -uv.y, -1.0));
+        default: return vec3(0.0);
     }
-    return vec3(0);
 }
 
 void main() {
@@ -29,8 +30,7 @@ void main() {
     vec2  uv = (vec2(id.xy) + 0.5) / vec2(size) * 2.0 - 1.0;
     vec3  N  = faceDir(uint(id.z), uv);
 
-    // Tangent frame
-    vec3  up    = abs(N.y) < 0.999 ? vec3(0,1,0) : vec3(1,0,0);
+    vec3  up    = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     vec3  right = normalize(cross(up, N));
     up          = cross(N, right);
 
@@ -41,9 +41,13 @@ void main() {
 
     for (float phi = 0.0; phi < 2.0 * PI; phi += dPhi) {
         for (float theta = 0.0; theta < 0.5 * PI; theta += dTheta) {
-            vec3 tangentSample = vec3(sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta));
-            vec3 sampleVec     = tangentSample.x * right + tangentSample.y * up + tangentSample.z * N;
-            irr  += texture(envCube, sampleVec).rgb * cos(theta) * sin(theta);
+            vec3 tangentSample = vec3(sin(theta)*cos(phi),
+                                      sin(theta)*sin(phi),
+                                      cos(theta));
+            vec3 sampleVec = tangentSample.x * right
+                           + tangentSample.y * up
+                           + tangentSample.z * N;
+            irr   += texture(envCube, sampleVec).rgb * cos(theta) * sin(theta);
             count += 1.0;
         }
     }
