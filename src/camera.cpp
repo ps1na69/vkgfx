@@ -80,18 +80,28 @@ glm::mat4 Camera::viewProj() const {
     return projection() * view();
 }
 
-// ── Frustum extraction (Gribb-Hartmann) ──────────────────────────────────────
+// ── Frustum extraction (Gribb-Hartmann, GLM column-major corrected) ────────────
+// GLM stores matrices column-major: m[col][row].
+// Gribb-Hartmann needs matrix ROWS, not columns.
+// Row i = { m[0][i], m[1][i], m[2][i], m[3][i] }
+// Planes: Left=r3+r0, Right=r3-r0, Bottom=r3+r1, Top=r3-r1, Near=r3+r2, Far=r3-r2
 
 Frustum Camera::frustum() const {
     glm::mat4 m = viewProj();
+
+    // Extract rows from the column-major GLM matrix
+    auto row = [&](int i) -> glm::vec4 {
+        return { m[0][i], m[1][i], m[2][i], m[3][i] };
+    };
+    glm::vec4 r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+
     Frustum f;
-    // Left, Right, Bottom, Top, Near, Far
-    f.planes[0] = m[3] + m[0];
-    f.planes[1] = m[3] - m[0];
-    f.planes[2] = m[3] + m[1];
-    f.planes[3] = m[3] - m[1];
-    f.planes[4] = m[3] + m[2];
-    f.planes[5] = m[3] - m[2];
+    f.planes[0] = r3 + r0;  // Left
+    f.planes[1] = r3 - r0;  // Right
+    f.planes[2] = r3 + r1;  // Bottom
+    f.planes[3] = r3 - r1;  // Top
+    f.planes[4] = r3 + r2;  // Near
+    f.planes[5] = r3 - r2;  // Far
     for (auto& p : f.planes)
         p /= glm::length(glm::vec3(p));
     return f;

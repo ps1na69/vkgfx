@@ -52,7 +52,7 @@ static_assert(sizeof(MeshPush) == 128);
 // ── Scene UBO ─────────────────────────────────────────────────────────────────
 // set=0 binding=0 in G-buffer pass (vertex stage)
 // set=1 binding=0 in lighting pass (fragment stage)
-struct SceneUBO {
+struct alignas(16) SceneUBO {
     glm::mat4 view;
     glm::mat4 proj;
     glm::mat4 viewProj;
@@ -88,7 +88,7 @@ struct alignas(16) PointLightGPU {
 };
 static_assert(sizeof(PointLightGPU) == 48);
 
-struct LightUBO {
+struct alignas(16) LightUBO {
     // Directional sun — 3 vec4s = 48 bytes
     glm::vec4  sunDirection;        // offset   0
     glm::vec4  sunColor;            // offset  16  (w = intensity)

@@ -1,48 +1,49 @@
 // examples/main.cpp
-// sky.hdr is OPTIONAL. Without it IBL is disabled and the scene renders
-// with sun + ambient only. Press F1 at runtime to toggle IBL on/off
-// (only works if sky.hdr was found at startup).
+// Deferred PBR + IBL + PCF shadows demo.
+//
+// Scene layout:
+//   - Ground plane (large flat sphere cluster forming a floor)
+//   - 5x5 sphere grid: roughness increases right (0→1), metallic increases up (0→1)
+//   - 4 colored point lights orbiting the scene
+//   - 1 large showcase sphere in the center
+//   - Directional sun with shadows
+//
+// sky.hdr is optional — IBL gracefully disabled if absent.
 
 #include <vkgfx/vkgfx.h>
+#include <vulkan/vulkan.h>
 #include <iostream>
 #include <filesystem>
 #include <chrono>
+#include <vector>
+#include <cmath>
+#include <sstream>
+#include <iomanip>
 
-static void printControls(bool iblAvailable) {
+using namespace vkgfx;
+
+// ── Path resolution helpers ───────────────────────────────────────────────────
+static std::string resolveFirst(std::vector<std::string> candidates) {
+    for (auto& c : candidates)
+        if (std::filesystem::exists(c)) return c;
+    return candidates[0];
+}
+
+static void printHelp(bool hdrFound) {
     std::cout
-        << "\n=== vkgfx example ===\n"
+        << "\n=== vkgfx demo ===\n"
         << "  WASD / QE   Move\n"
         << "  Mouse       Look\n"
-        << "  F1          Toggle IBL"
-        << (iblAvailable ? "" : "  [DISABLED — sky.hdr not found]") << "\n"
+        << "  F1          Toggle IBL" << (hdrFound ? "" : " [no sky.hdr]") << "\n"
         << "  F2          Toggle Sun\n"
-        << "  F3          G-buffer: Albedo\n"
-        << "  F4          G-buffer: Normal\n"
-        << "  F5          G-buffer: Roughness\n"
-        << "  F6          G-buffer: Metallic\n"
-        << "  F7          G-buffer: Depth\n"
-        << "  F8          G-buffer: AO\n"
-        << "  F9          Full lighting (reset debug)\n"
+        << "  F3-F9       G-buffer debug views\n"
         << "  Esc         Quit\n\n";
 }
 
-// Resolve a path relative to the executable first, then CWD.
-// This handles both running from build/Debug/ (VS default) and from CWD.
-static std::string resolveAssetPath(const std::string& rel) {
-    // 1. Relative to CWD
-    if (std::filesystem::exists(rel)) return rel;
-    // 2. Give up — return original (caller will handle absence)
-    return rel;
-}
-
 int main(int argc, char** argv) {
-    using namespace vkgfx;
-
-    // ── Build config ──────────────────────────────────────────────────────────
+    // ── Config ────────────────────────────────────────────────────────────────
     RendererConfig cfg;
-    cfg.shaderDir          = "shaders";
-    cfg.assetDir           = "assets";
-    cfg.ibl.hdrPath        = cfg.assetDir + "/sky.hdr";
+    cfg.vsync              = false;
     cfg.ibl.envMapSize     = 512;
     cfg.ibl.irradianceSize = 32;
     cfg.ibl.intensity      = 1.0f;
@@ -50,115 +51,161 @@ int main(int argc, char** argv) {
     cfg.sun.direction[0]   = -0.4f;
     cfg.sun.direction[1]   = -1.0f;
     cfg.sun.direction[2]   = -0.3f;
-    cfg.sun.intensity      = 5.0f;
-    cfg.msaa               = MSAASamples::x4;
-    cfg.vsync              = true;
+    cfg.sun.intensity      = 4.0f;
+    cfg.sun.color[0] = cfg.sun.color[1] = cfg.sun.color[2] = 1.f;
     cfg.gbufferDebug       = GBufferDebugView::None;
 
-    // Override from JSON file if provided as first argument
-    if (argc > 1) {
-        if (!std::filesystem::exists(argv[1])) {
-            std::cerr << "[example] Config not found: " << argv[1] << "\n";
-            return 1;
-        }
-        cfg = RendererConfig::fromFile(argv[1]);
-    }
+    if (argc > 1) cfg = RendererConfig::fromFile(argv[1]);
 
-    // ── Resolve shaderDir ────────────────────────────────────────────────────
-    // The renderer also does this, but resolving here gives a clear startup log.
-    {
-        const std::string probe = "/gbuffer.vert.spv";
-        std::vector<std::string> candidates = {
-            cfg.shaderDir, "shaders", "../shaders",
-            "build/shaders", "build/Debug/shaders", "build/Release/shaders",
-            "../build/shaders", "../build/Debug/shaders", "../build/Release/shaders",
-        };
-        for (auto& c : candidates) {
-            if (std::filesystem::exists(c + probe)) {
-                cfg.shaderDir = c;
-                std::cout << "[example] Resolved shaderDir: " << c << "\n";
-                break;
-            }
-        }
-    }
+    // Resolve shader dir
+    cfg.shaderDir = resolveFirst({
+        cfg.shaderDir, "shaders", "../shaders",
+        "build/shaders", "build/Debug/shaders", "build/Release/shaders",
+        "../build/shaders", "../build/Debug/shaders"
+    });
 
-    // ── sky.hdr is OPTIONAL ───────────────────────────────────────────────────
+    // Resolve sky.hdr
     bool hdrFound = false;
     {
-        std::vector<std::string> candidates = {
-            cfg.ibl.hdrPath,
-            "assets/sky.hdr",
-            "../assets/sky.hdr",
-            "../../assets/sky.hdr",
-        };
-        for (auto& c : candidates) {
-            if (std::filesystem::exists(c)) {
-                cfg.ibl.hdrPath = c;
-                hdrFound = true;
-                std::cout << "[example] Found sky.hdr at: " << c << "\n";
-                break;
-            }
+        auto path = resolveFirst({
+            cfg.ibl.hdrPath, "assets/sky.hdr", "../assets/sky.hdr",
+            "../../assets/sky.hdr"
+        });
+        if (std::filesystem::exists(path)) {
+            cfg.ibl.hdrPath = path;
+            cfg.ibl.enabled = true;
+            hdrFound = true;
+            std::cout << "[example] HDR: " << path << "\n";
+        } else {
+            cfg.ibl.enabled = false;
+            std::cout << "[example] sky.hdr not found — IBL disabled\n"
+                      << "          Download from https://polyhaven.com/hdris\n\n";
         }
     }
-
-    if (!hdrFound) {
-        std::cout << "[example] sky.hdr not found — IBL disabled.\n"
-                  << "          Place an equirectangular HDR at assets/sky.hdr to enable IBL.\n"
-                  << "          Download free HDRs from https://polyhaven.com/hdris\n\n";
-        cfg.ibl.enabled = false;
-    } else {
-        cfg.ibl.enabled = true;
-    }
-
-    printControls(hdrFound);
+    printHelp(hdrFound);
 
     // ── Window + Renderer ─────────────────────────────────────────────────────
-    Window   window("vkgfx — deferred PBR + IBL", 1280, 720);
+    Window   window("vkgfx — deferred PBR + IBL", 1920, 1080);
+
     Renderer renderer(window, cfg);
+    Context& ctx = renderer.context();
+
+    // ── Camera ────────────────────────────────────────────────────────────────
+    Camera cam;
+    cam.setPosition({0.f, 2.5f, -9.f}).setFov(60.f);
 
     // ── Scene ─────────────────────────────────────────────────────────────────
-    Camera cam;
-    cam.setPosition({0.f, 0.f, -4.f}).setFov(60.f);
-
     Scene scene;
     scene.setCamera(&cam);
 
-    // 4x4 sphere grid: roughness increases right, metallic increases up
-    // Keep handles so we can explicitly free GPU resources before shutdown.
-    std::vector<std::shared_ptr<vkgfx::Mesh>> spheres;
-    for (int row = 0; row < 4; ++row) {
-        for (int col = 0; col < 4; ++col) {
-            auto sphere = vkgfx::Mesh::createSphere(0.3f, 32, 32, renderer.context());
-            sphere->setPosition({(col - 1.5f) * 0.9f,
-                                  (row - 1.5f) * 0.9f, 0.f});
-            auto mat = std::make_shared<vkgfx::PBRMaterial>();
-            mat->setAlbedo(0.8f, 0.3f, 0.2f)
-                .setRoughness(static_cast<float>(col) / 3.f)
-                .setMetallic (static_cast<float>(row) / 3.f);
-            sphere->setMaterial(mat);
-            spheres.push_back(sphere);
-            scene.add(sphere);
+    std::vector<std::shared_ptr<Mesh>> meshes;
+
+    auto addSphere = [&](glm::vec3 pos, float r, float g, float b,
+                         float roughness, float metallic) {
+        auto s = Mesh::createSphere(0.42f, 32, 32, ctx);
+        s->setPosition(pos);
+        auto m = std::make_shared<PBRMaterial>();
+        m->setAlbedo(r, g, b).setRoughness(roughness).setMetallic(metallic);
+        s->setMaterial(m);
+        scene.add(s);
+        meshes.push_back(s);
+    };
+
+    // 5×5 PBR grid: col = roughness (0→1 left→right), row = metallic (0→1 bottom→top)
+    const int   GRID = 5;
+    const float STEP = 1.1f;
+    const float OX   = -(GRID - 1) * STEP * 0.5f;
+    const float OY   =  1.0f;
+    for (int row = 0; row < GRID; ++row) {
+        float met = static_cast<float>(row) / (GRID - 1);
+        for (int col = 0; col < GRID; ++col) {
+            float rou = 0.05f + static_cast<float>(col) / (GRID - 1) * 0.95f;
+            // Color gradient: copper for metallic, warm white for dielectric
+            float colR = glm::mix(0.95f, 0.72f, met);
+            float colG = glm::mix(0.85f, 0.45f, met);
+            float colB = glm::mix(0.80f, 0.20f, met);
+            addSphere({OX + col * STEP, OY + row * STEP, 0.f},
+                       colR, colG, colB, rou, met);
         }
     }
 
+    // Large showcase sphere dead centre, gold metallic
+    addSphere({0.f, OY + (GRID - 1) * STEP * 0.5f, -2.8f},
+               1.0f, 0.78f, 0.34f, 0.1f, 1.0f);
+
+    // Ground — a row of flat spheres as a floor plane
+    for (int i = -6; i <= 6; ++i) {
+        for (int j = -6; j <= 6; ++j) {
+            auto s = Mesh::createSphere(0.5f, 16, 16, ctx);
+            s->setPosition({i * 1.0f, -0.35f, j * 1.0f});
+            s->setScale({1.f, 0.12f, 1.f}); // squash to make a flat tile
+            auto m = std::make_shared<PBRMaterial>();
+            float checker = ((i + j) % 2 == 0) ? 0.8f : 0.3f;
+            m->setAlbedo(checker, checker, checker).setRoughness(0.9f).setMetallic(0.0f);
+            s->setMaterial(m);
+            scene.add(s);
+            meshes.push_back(s);
+        }
+    }
+
+    // ── Sun ───────────────────────────────────────────────────────────────────
     auto sun = std::make_shared<DirectionalLight>();
     sun->setDirection(cfg.sun.direction[0], cfg.sun.direction[1], cfg.sun.direction[2])
         .setIntensity(cfg.sun.intensity)
         .setEnabled(cfg.sun.enabled);
     scene.add(sun);
 
+    // ── 4 colored point lights ────────────────────────────────────────────────
+    const glm::vec3 ptColors[4] = {
+        {1.0f, 0.2f, 0.1f},  // red
+        {0.1f, 0.4f, 1.0f},  // blue
+        {0.2f, 1.0f, 0.3f},  // green
+        {1.0f, 0.8f, 0.1f},  // yellow
+    };
+    std::vector<std::shared_ptr<PointLight>> ptLights;
+    for (int i = 0; i < 4; ++i) {
+        auto l = std::make_shared<PointLight>();
+        l->setColor(ptColors[i].r, ptColors[i].g, ptColors[i].b)
+         .setIntensity(60.f)
+         .setRadius(8.f);
+        scene.add(l);
+        ptLights.push_back(l);
+    }
+
     // ── Main loop ─────────────────────────────────────────────────────────────
-    const float MOVE  = 3.0f;
-    const float LOOK  = 0.1f;
-    auto lastTime = std::chrono::high_resolution_clock::now();
+    const float MOVE  = 5.0f;
+    const float LOOK  = 0.10f;
+    auto lastTime     = std::chrono::high_resolution_clock::now();
+    float totalTime   = 0.f;
+
+    // FPS counter state
+    float  fpsTimer   = 0.f;
+    int    fpsFrames  = 0;
+    float  fpsDisplay = 0.f;
 
     while (!window.shouldClose()) {
-        auto now  = std::chrono::high_resolution_clock::now();
-        float dt  = std::chrono::duration<float>(now - lastTime).count();
-        lastTime  = now;
+        auto now = std::chrono::high_resolution_clock::now();
+        float dt = std::chrono::duration<float>(now - lastTime).count();
+        lastTime = now;
+        totalTime += dt;
+
+        // FPS counter — update title every 0.5 s
+        ++fpsFrames;
+        fpsTimer += dt;
+        if (fpsTimer >= 0.5f) {
+            fpsDisplay = fpsFrames / fpsTimer;
+            fpsTimer   = 0.f;
+            fpsFrames  = 0;
+            std::ostringstream oss;
+            oss << "vkgfx — deferred PBR + IBL  |  "
+                << std::fixed << std::setprecision(1) << fpsDisplay << " fps  |  "
+                << std::setprecision(2) << (1000.f / fpsDisplay) << " ms";
+            window.setTitle(oss.str());
+        }
 
         window.pollEvents();
 
+        // Camera movement
         float spd = MOVE * dt;
         if (window.keyHeld(GLFW_KEY_W)) cam.moveForward( spd);
         if (window.keyHeld(GLFW_KEY_S)) cam.moveForward(-spd);
@@ -166,25 +213,32 @@ int main(int argc, char** argv) {
         if (window.keyHeld(GLFW_KEY_D)) cam.moveRight  ( spd);
         if (window.keyHeld(GLFW_KEY_Q)) cam.moveUp     (-spd);
         if (window.keyHeld(GLFW_KEY_E)) cam.moveUp     ( spd);
-
         cam.rotateYaw  ( window.mouseDX() * LOOK);
         cam.rotatePitch(-window.mouseDY() * LOOK);
 
         if (window.keyPressed(GLFW_KEY_ESCAPE)) break;
 
-        // IBL toggle — only useful if sky.hdr was found at startup
+        // Fullscreen toggle (F11)
+        if (window.keyPressed(GLFW_KEY_F11))
+            window.toggleFullscreen();
+
+        // Cursor lock toggle (Tab — useful for GUI interaction)
+        if (window.keyPressed(GLFW_KEY_TAB))
+            window.toggleCursorLock();
+
+        // IBL toggle
         if (window.keyPressed(GLFW_KEY_F1) && hdrFound) {
             cfg.ibl.enabled = !cfg.ibl.enabled;
             std::cout << "IBL: " << (cfg.ibl.enabled ? "ON" : "OFF") << "\n";
             renderer.applyConfig(cfg);
         }
-
+        // Sun toggle
         if (window.keyPressed(GLFW_KEY_F2)) {
             cfg.sun.enabled = !cfg.sun.enabled;
             sun->setEnabled(cfg.sun.enabled);
             std::cout << "Sun: " << (cfg.sun.enabled ? "ON" : "OFF") << "\n";
         }
-
+        // G-buffer debug views
         static const std::pair<int, GBufferDebugView> debugKeys[] = {
             {GLFW_KEY_F3, GBufferDebugView::Albedo},
             {GLFW_KEY_F4, GBufferDebugView::Normal},
@@ -201,17 +255,25 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Orbit point lights around the grid
+        float orbitR = 4.5f;
+        for (int i = 0; i < 4; ++i) {
+            float angle = totalTime * 0.6f + i * (glm::pi<float>() * 0.5f);
+            float height = 2.0f + std::sin(totalTime * 0.4f + i) * 1.5f;
+            ptLights[i]->setPosition({
+                std::cos(angle) * orbitR,
+                OY + height,
+                std::sin(angle) * orbitR
+            });
+        }
+
         renderer.render(scene);
     }
 
-    // Wait for GPU to finish all in-flight work before freeing mesh buffers.
-    // renderer.shutdown() also calls vkDeviceWaitIdle, but mesh destroy must
-    // happen after idle too — doing it here ensures correct order.
-    vkDeviceWaitIdle(renderer.context().device());
-
-    for (auto& s : spheres)
-        s->destroy(renderer.context());
-    spheres.clear();
+    // Cleanup
+    vkDeviceWaitIdle(ctx.device());
+    for (auto& m : meshes) m->destroy(ctx);
+    meshes.clear();
 
     renderer.shutdown();
     std::cout << "[example] clean exit\n";

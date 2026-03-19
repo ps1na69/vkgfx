@@ -169,8 +169,16 @@ void main() {
     if (debugView == 6u) { outColor = vec4(vec3(ao),        1.0); return; }
     if (debugView == 7u) { outColor = vec4(emissive,        1.0); return; }
 
-    // ── Sky passthrough ───────────────────────────────────────────────────────
-    if (depth >= 1.0) { outColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    // ── Sky background ────────────────────────────────────────────────────────
+    // Reconstruct view direction from UV, sample the env cube at mip 0.
+    if (depth >= 1.0) {
+        vec4 clipPos   = vec4(inUV * 2.0 - 1.0, 1.0, 1.0);
+        vec4 viewDirH  = scene.invViewProj * clipPos;
+        vec3 skyDir    = normalize(viewDirH.xyz / viewDirH.w - scene.cameraPos.xyz);
+        vec3 skyColor  = textureLod(prefilteredCube, skyDir, 0.0).rgb;
+        outColor = vec4(skyColor, 1.0);
+        return;
+    }
 
     // ── PBR setup ─────────────────────────────────────────────────────────────
     vec3  worldPos = worldPosFromDepth(depth);
