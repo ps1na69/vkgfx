@@ -3,4 +3,6 @@
   <ItemGroup>
     <CustomBuild Include="D:\Programming\vkgfx-refactor\CMakeLists.txt" />
   </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
 </Project>

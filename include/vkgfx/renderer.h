@@ -46,7 +46,9 @@ private:
     void initTonemapPass();
     void initPerFrameResources();
     void initIBL();
-    void initDefaultTextures(); // 1x1 fallback textures for default material set
+    void initDefaultTextures();
+    void initShadowPass();
+    void recordShadowPass(VkCommandBuffer cmd, Scene& scene); // 1x1 fallback textures for default material set
     void uploadMeshMaterials(Scene& scene); // allocate+write material descriptors
     void validateAssets();
 
@@ -63,8 +65,9 @@ private:
     std::unique_ptr<Swapchain> m_swapchain;
     std::unique_ptr<IBLSystem> m_ibl;
 
-    // G-buffer attachments: [0]=albedo [1]=normal [2]=RMA [3]=depth
-    std::array<AllocatedImage, 4> m_gbuffer{};
+    // G-buffer attachments:
+    //   [0]=albedo  [1]=normal  [2]=RMA  [3]=emissive  [4]=shadowCoord  [5]=depth
+    std::array<AllocatedImage, 6> m_gbuffer{};
 
     // Offscreen HDR target (lighting result, fed into tonemap)
     AllocatedImage m_hdrTarget{};
@@ -76,6 +79,15 @@ private:
     // Framebuffers
     VkFramebuffer m_gbufferFb    = VK_NULL_HANDLE;
     VkFramebuffer m_lightingFb   = VK_NULL_HANDLE;
+
+    // Shadow map pass
+    AllocatedImage      m_shadowMap{};
+    VkRenderPass        m_shadowPass       = VK_NULL_HANDLE;
+    VkFramebuffer       m_shadowFb         = VK_NULL_HANDLE;
+    VkPipelineLayout    m_shadowLayout     = VK_NULL_HANDLE;
+    VkPipeline          m_shadowPipeline   = VK_NULL_HANDLE;
+    VkSampler           m_shadowSampler    = VK_NULL_HANDLE;
+    static constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
     // Pipelines + layouts
     VkPipelineLayout m_gbufferLayout    = VK_NULL_HANDLE;

@@ -57,23 +57,28 @@ std::vector<Mesh*> Scene::visibleMeshes() const {
 void Scene::fillLightUBO(LightUBO& ubo, float iblIntensity, uint32_t gbufferDebug) const {
     ubo = LightUBO{};
 
+    // ── Directional sun ───────────────────────────────────────────────────────
     if (m_dirLight) {
-        ubo.sun.direction = glm::vec4(m_dirLight->direction(), 0.f);
-        ubo.sun.color     = glm::vec4(m_dirLight->color(), m_dirLight->intensity());
-        ubo.sun.enabled   = m_dirLight->enabled() ? 1u : 0u;
+        ubo.sunDirection    = glm::vec4(m_dirLight->direction(), 0.f);
+        ubo.sunColor        = glm::vec4(m_dirLight->color(), m_dirLight->intensity());
+        ubo.sunFlags.x      = m_dirLight->enabled() ? 1u : 0u;
+        ubo.sunFlags.y      = m_dirLight->enabled() ? 1u : 0u; // shadow follows sun
     }
 
+    // ── Point lights ──────────────────────────────────────────────────────────
     uint32_t count = 0;
-    for (auto& pl : m_pointLights) {
-        if (!pl->enabled() || count >= MAX_POINT_LIGHTS) continue;
-        auto& d    = ubo.points[count++];
-        d.position = glm::vec4(pl->position(), 0.f);
-        d.color    = glm::vec4(pl->color(), pl->intensity());
-        d.radius   = pl->radius();
+    for (auto& light : m_pointLights) {
+        if (!light || count >= MAX_POINT_LIGHTS) break;
+        ubo.points[count].position = glm::vec4(light->position(), 1.f);
+        ubo.points[count].color    = glm::vec4(light->color(), light->intensity());
+        ubo.points[count].params   = glm::vec4(light->radius(), 0.f, 0.f, 0.f);
+        ++count;
     }
-    ubo.pointCount   = count;
-    ubo.iblIntensity = iblIntensity;
-    ubo.gbufferDebug = gbufferDebug;
+
+    // ── Misc ──────────────────────────────────────────────────────────────────
+    ubo.miscFlags.x = count;
+    ubo.miscFlags.y = gbufferDebug;
+    ubo.iblParams.x = iblIntensity;
 }
 
 } // namespace vkgfx

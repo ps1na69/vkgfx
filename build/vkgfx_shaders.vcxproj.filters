@@ -25,6 +25,9 @@
     <CustomBuild Include="D:\Programming\vkgfx-refactor\build\CMakeFiles\e7789abde3a294c2721706a34bcc3774\prefilter.comp.spv.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\CMakeFiles\e7789abde3a294c2721706a34bcc3774\shadow.vert.spv.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
     <CustomBuild Include="D:\Programming\vkgfx-refactor\build\CMakeFiles\e7789abde3a294c2721706a34bcc3774\tonemap.frag.spv.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>

@@ -77,7 +77,7 @@ events:
       The output was:
       0
       MSBuild version 18.4.0+6e61e96ac for .NET Framework
-      Build started 16.03.2026 22:30:43.
+      Build started 19.03.2026 21:16:10.
       
       Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\4.2.1\\CompilerIdCXX\\CompilerIdCXX.vcxproj" on node 1 (default targets).
       PrepareForBuild:
@@ -875,8 +875,8 @@ events:
     checks:
       - "Detecting CXX compiler ABI info"
     directories:
-      source: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-8gem6e"
-      binary: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-8gem6e"
+      source: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-nbp0a2"
+      binary: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-nbp0a2"
     cmakeVariables:
       CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /EHsc"
       CMAKE_CXX_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -886,33 +886,33 @@ events:
       variable: "CMAKE_CXX_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: 'D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-8gem6e'
+        Change Dir: 'D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-nbp0a2'
         
-        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_da424.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_ca450.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
         MSBuild version 18.4.0+6e61e96ac for .NET Framework
-        Build started 16.03.2026 22:30:44.
+        Build started 19.03.2026 21:16:10.
         
-        Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8gem6e\\cmTC_da424.vcxproj" on node 1 (default targets).
+        Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-nbp0a2\\cmTC_ca450.vcxproj" on node 1 (default targets).
         PrepareForBuild:
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Creating directory "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8gem6e\\Debug\\".
-          Creating directory "cmTC_da424.dir\\Debug\\cmTC_da424.tlog\\".
+          Creating directory "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-nbp0a2\\Debug\\".
+          Creating directory "cmTC_ca450.dir\\Debug\\cmTC_ca450.tlog\\".
         InitializeBuildStatus:
-          Creating "cmTC_da424.dir\\Debug\\cmTC_da424.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
-          Touching "cmTC_da424.dir\\Debug\\cmTC_da424.tlog\\unsuccessfulbuild".
+          Creating "cmTC_ca450.dir\\Debug\\cmTC_ca450.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_ca450.dir\\Debug\\cmTC_ca450.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /Fo"cmTC_da424.dir\\Debug\\\\" /Fd"cmTC_da424.dir\\Debug\\vc145.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCXXCompilerABI.cpp"
-          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35726 for x64
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /Fo"cmTC_ca450.dir\\Debug\\\\" /Fd"cmTC_ca450.dir\\Debug\\vc145.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCXXCompilerABI.cpp"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35727 for x64
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /Fo"cmTC_da424.dir\\Debug\\\\" /Fd"cmTC_da424.dir\\Debug\\vc145.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCXXCompilerABI.cpp"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /Fo"cmTC_ca450.dir\\Debug\\\\" /Fd"cmTC_ca450.dir\\Debug\\vc145.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCXXCompilerABI.cpp"
           CMakeCXXCompilerABI.cpp
         Link:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8gem6e\\Debug\\cmTC_da424.exe" /INCREMENTAL /ILK:"cmTC_da424.dir\\Debug\\cmTC_da424.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-8gem6e/Debug/cmTC_da424.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-8gem6e/Debug/cmTC_da424.lib" /MACHINE:X64  /machine:x64 cmTC_da424.dir\\Debug\\CMakeCXXCompilerABI.obj
-          cmTC_da424.vcxproj -> D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8gem6e\\Debug\\cmTC_da424.exe
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-nbp0a2\\Debug\\cmTC_ca450.exe" /INCREMENTAL /ILK:"cmTC_ca450.dir\\Debug\\cmTC_ca450.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-nbp0a2/Debug/cmTC_ca450.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-nbp0a2/Debug/cmTC_ca450.lib" /MACHINE:X64  /machine:x64 cmTC_ca450.dir\\Debug\\CMakeCXXCompilerABI.obj
+          cmTC_ca450.vcxproj -> D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-nbp0a2\\Debug\\cmTC_ca450.exe
         FinalizeBuildStatus:
-          Deleting file "cmTC_da424.dir\\Debug\\cmTC_da424.tlog\\unsuccessfulbuild".
-          Touching "cmTC_da424.dir\\Debug\\cmTC_da424.tlog\\cmTC_da424.lastbuildstate".
-        Done Building Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8gem6e\\cmTC_da424.vcxproj" (default targets).
+          Deleting file "cmTC_ca450.dir\\Debug\\cmTC_ca450.tlog\\unsuccessfulbuild".
+          Touching "cmTC_ca450.dir\\Debug\\cmTC_ca450.tlog\\cmTC_ca450.lastbuildstate".
+        Done Building Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-nbp0a2\\cmTC_ca450.vcxproj" (default targets).
         
         Build succeeded.
             0 Warning(s)
@@ -947,7 +947,7 @@ events:
       - "CMakeLists.txt:2 (project)"
     message: |
       Running the CXX compiler's linker: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/HostX64/x64/link.exe" "-v"
-      Microsoft (R) Incremental Linker Version 14.50.35726.0
+      Microsoft (R) Incremental Linker Version 14.50.35727.0
       Copyright (C) Microsoft Corporation.  All rights reserved.
   -
     kind: "find-v1"
@@ -1942,7 +1942,7 @@ events:
       The output was:
       0
       MSBuild version 18.4.0+6e61e96ac for .NET Framework
-      Build started 16.03.2026 22:30:51.
+      Build started 19.03.2026 21:16:18.
       
       Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\4.2.1\\CompilerIdC\\CompilerIdC.vcxproj" on node 1 (default targets).
       PrepareForBuild:
@@ -1971,7 +1971,7 @@ events:
           0 Warning(s)
           0 Error(s)
       
-      Time Elapsed 00:00:00.34
+      Time Elapsed 00:00:00.37
       
       
       Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CompilerIdC.exe"
@@ -2200,8 +2200,8 @@ events:
     checks:
       - "Detecting C compiler ABI info"
     directories:
-      source: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-ssn5o6"
-      binary: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-ssn5o6"
+      source: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-8pd6hc"
+      binary: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-8pd6hc"
     cmakeVariables:
       CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
       CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -2210,39 +2210,39 @@ events:
       variable: "CMAKE_C_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: 'D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-ssn5o6'
+        Change Dir: 'D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-8pd6hc'
         
-        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_013c5.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_08134.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
         MSBuild version 18.4.0+6e61e96ac for .NET Framework
-        Build started 16.03.2026 22:30:51.
+        Build started 19.03.2026 21:16:18.
         
-        Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ssn5o6\\cmTC_013c5.vcxproj" on node 1 (default targets).
+        Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8pd6hc\\cmTC_08134.vcxproj" on node 1 (default targets).
         PrepareForBuild:
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Creating directory "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ssn5o6\\Debug\\".
-          Creating directory "cmTC_013c5.dir\\Debug\\cmTC_013c5.tlog\\".
+          Creating directory "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8pd6hc\\Debug\\".
+          Creating directory "cmTC_08134.dir\\Debug\\cmTC_08134.tlog\\".
         InitializeBuildStatus:
-          Creating "cmTC_013c5.dir\\Debug\\cmTC_013c5.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
-          Touching "cmTC_013c5.dir\\Debug\\cmTC_013c5.tlog\\unsuccessfulbuild".
+          Creating "cmTC_08134.dir\\Debug\\cmTC_08134.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_08134.dir\\Debug\\cmTC_08134.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_013c5.dir\\Debug\\\\" /Fd"cmTC_013c5.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCCompilerABI.c"
-          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35726 for x64
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_08134.dir\\Debug\\\\" /Fd"cmTC_08134.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCCompilerABI.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35727 for x64
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_013c5.dir\\Debug\\\\" /Fd"cmTC_013c5.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCCompilerABI.c"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_08134.dir\\Debug\\\\" /Fd"cmTC_08134.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCCompilerABI.c"
           CMakeCCompilerABI.c
         Link:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ssn5o6\\Debug\\cmTC_013c5.exe" /INCREMENTAL /ILK:"cmTC_013c5.dir\\Debug\\cmTC_013c5.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-ssn5o6/Debug/cmTC_013c5.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-ssn5o6/Debug/cmTC_013c5.lib" /MACHINE:X64  /machine:x64 cmTC_013c5.dir\\Debug\\CMakeCCompilerABI.obj
-          cmTC_013c5.vcxproj -> D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ssn5o6\\Debug\\cmTC_013c5.exe
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8pd6hc\\Debug\\cmTC_08134.exe" /INCREMENTAL /ILK:"cmTC_08134.dir\\Debug\\cmTC_08134.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-8pd6hc/Debug/cmTC_08134.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-8pd6hc/Debug/cmTC_08134.lib" /MACHINE:X64  /machine:x64 cmTC_08134.dir\\Debug\\CMakeCCompilerABI.obj
+          cmTC_08134.vcxproj -> D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8pd6hc\\Debug\\cmTC_08134.exe
         FinalizeBuildStatus:
-          Deleting file "cmTC_013c5.dir\\Debug\\cmTC_013c5.tlog\\unsuccessfulbuild".
-          Touching "cmTC_013c5.dir\\Debug\\cmTC_013c5.tlog\\cmTC_013c5.lastbuildstate".
-        Done Building Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ssn5o6\\cmTC_013c5.vcxproj" (default targets).
+          Deleting file "cmTC_08134.dir\\Debug\\cmTC_08134.tlog\\unsuccessfulbuild".
+          Touching "cmTC_08134.dir\\Debug\\cmTC_08134.tlog\\cmTC_08134.lastbuildstate".
+        Done Building Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8pd6hc\\cmTC_08134.vcxproj" (default targets).
         
         Build succeeded.
             0 Warning(s)
             0 Error(s)
         
-        Time Elapsed 00:00:00.33
+        Time Elapsed 00:00:00.34
         
       exitCode: 0
   -
@@ -2271,7 +2271,7 @@ events:
       - "build/_deps/glfw-src/CMakeLists.txt:3 (project)"
     message: |
       Running the C compiler's linker: "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/HostX64/x64/link.exe" "-v"
-      Microsoft (R) Incremental Linker Version 14.50.35726.0
+      Microsoft (R) Incremental Linker Version 14.50.35727.0
       Copyright (C) Microsoft Corporation.  All rights reserved.
   -
     kind: "try_compile-v1"
@@ -2284,8 +2284,8 @@ events:
     checks:
       - "Performing Test CMAKE_HAVE_LIBC_PTHREAD"
     directories:
-      source: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-o8gczx"
-      binary: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-o8gczx"
+      source: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-gjjzt1"
+      binary: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-gjjzt1"
     cmakeVariables:
       CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
       CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -2295,34 +2295,33 @@ events:
       variable: "CMAKE_HAVE_LIBC_PTHREAD"
       cached: true
       stdout: |
-        Change Dir: 'D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-o8gczx'
+        Change Dir: 'D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-gjjzt1'
         
-        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_bbf99.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_f9edb.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
         MSBuild version 18.4.0+6e61e96ac for .NET Framework
-        Build started 16.03.2026 22:30:52.
+        Build started 19.03.2026 21:16:19.
         
-        Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-o8gczx\\cmTC_bbf99.vcxproj" on node 1 (default targets).
+        Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gjjzt1\\cmTC_f9edb.vcxproj" on node 1 (default targets).
         PrepareForBuild:
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Creating directory "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-o8gczx\\Debug\\".
-          Creating directory "cmTC_bbf99.dir\\Debug\\cmTC_bbf99.tlog\\".
+          Creating directory "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gjjzt1\\Debug\\".
+          Creating directory "cmTC_f9edb.dir\\Debug\\cmTC_f9edb.tlog\\".
         InitializeBuildStatus:
-          Creating "cmTC_bbf99.dir\\Debug\\cmTC_bbf99.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
-          Touching "cmTC_bbf99.dir\\Debug\\cmTC_bbf99.tlog\\unsuccessfulbuild".
+          Creating "cmTC_f9edb.dir\\Debug\\cmTC_f9edb.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_f9edb.dir\\Debug\\cmTC_f9edb.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CMAKE_HAVE_LIBC_PTHREAD /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_bbf99.dir\\Debug\\\\" /Fd"cmTC_bbf99.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-o8gczx\\src.c"
-          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35726 for x64
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CMAKE_HAVE_LIBC_PTHREAD /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_f9edb.dir\\Debug\\\\" /Fd"cmTC_f9edb.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gjjzt1\\src.c"
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CMAKE_HAVE_LIBC_PTHREAD /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_bbf99.dir\\Debug\\\\" /Fd"cmTC_bbf99.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-o8gczx\\src.c"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CMAKE_HAVE_LIBC_PTHREAD /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_f9edb.dir\\Debug\\\\" /Fd"cmTC_f9edb.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gjjzt1\\src.c"
           src.c
-        D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-o8gczx\\src.c(1,10): error C1083: Cannot open include file: 'pthread.h': No such file or directory [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-o8gczx\\cmTC_bbf99.vcxproj]
-        Done Building Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-o8gczx\\cmTC_bbf99.vcxproj" (default targets) -- FAILED.
+        D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gjjzt1\\src.c(1,10): error C1083: Cannot open include file: 'pthread.h': No such file or directory [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gjjzt1\\cmTC_f9edb.vcxproj]
+        Done Building Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gjjzt1\\cmTC_f9edb.vcxproj" (default targets) -- FAILED.
         
         Build FAILED.
         
-        "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-o8gczx\\cmTC_bbf99.vcxproj" (default target) (1) ->
+        "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gjjzt1\\cmTC_f9edb.vcxproj" (default target) (1) ->
         (ClCompile target) -> 
-          D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-o8gczx\\src.c(1,10): error C1083: Cannot open include file: 'pthread.h': No such file or directory [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-o8gczx\\cmTC_bbf99.vcxproj]
+          D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gjjzt1\\src.c(1,10): error C1083: Cannot open include file: 'pthread.h': No such file or directory [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gjjzt1\\cmTC_f9edb.vcxproj]
         
             0 Warning(s)
             1 Error(s)
@@ -2340,8 +2339,8 @@ events:
     checks:
       - "Looking for pthread_create in pthreads"
     directories:
-      source: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-5ljzuc"
-      binary: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-5ljzuc"
+      source: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-7t4i02"
+      binary: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-7t4i02"
     cmakeVariables:
       CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
       CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -2351,36 +2350,36 @@ events:
       variable: "CMAKE_HAVE_PTHREADS_CREATE"
       cached: true
       stdout: |
-        Change Dir: 'D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-5ljzuc'
+        Change Dir: 'D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-7t4i02'
         
-        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_bbdd2.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_2105b.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
         MSBuild version 18.4.0+6e61e96ac for .NET Framework
-        Build started 16.03.2026 22:30:52.
+        Build started 19.03.2026 21:16:19.
         
-        Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5ljzuc\\cmTC_bbdd2.vcxproj" on node 1 (default targets).
+        Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7t4i02\\cmTC_2105b.vcxproj" on node 1 (default targets).
         PrepareForBuild:
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Creating directory "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5ljzuc\\Debug\\".
-          Creating directory "cmTC_bbdd2.dir\\Debug\\cmTC_bbdd2.tlog\\".
+          Creating directory "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7t4i02\\Debug\\".
+          Creating directory "cmTC_2105b.dir\\Debug\\cmTC_2105b.tlog\\".
         InitializeBuildStatus:
-          Creating "cmTC_bbdd2.dir\\Debug\\cmTC_bbdd2.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
-          Touching "cmTC_bbdd2.dir\\Debug\\cmTC_bbdd2.tlog\\unsuccessfulbuild".
+          Creating "cmTC_2105b.dir\\Debug\\cmTC_2105b.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_2105b.dir\\Debug\\cmTC_2105b.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_bbdd2.dir\\Debug\\\\" /Fd"cmTC_bbdd2.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5ljzuc\\CheckFunctionExists.c"
-          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35726 for x64
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_2105b.dir\\Debug\\\\" /Fd"cmTC_2105b.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7t4i02\\CheckFunctionExists.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35727 for x64
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_bbdd2.dir\\Debug\\\\" /Fd"cmTC_bbdd2.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5ljzuc\\CheckFunctionExists.c"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_2105b.dir\\Debug\\\\" /Fd"cmTC_2105b.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7t4i02\\CheckFunctionExists.c"
           CheckFunctionExists.c
         Link:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5ljzuc\\Debug\\cmTC_bbdd2.exe" /INCREMENTAL /ILK:"cmTC_bbdd2.dir\\Debug\\cmTC_bbdd2.ilk" /NOLOGO pthreads.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-5ljzuc/Debug/cmTC_bbdd2.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-5ljzuc/Debug/cmTC_bbdd2.lib" /MACHINE:X64  /machine:x64 cmTC_bbdd2.dir\\Debug\\CheckFunctionExists.obj
-        LINK : fatal error LNK1104: cannot open file 'pthreads.lib' [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5ljzuc\\cmTC_bbdd2.vcxproj]
-        Done Building Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5ljzuc\\cmTC_bbdd2.vcxproj" (default targets) -- FAILED.
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7t4i02\\Debug\\cmTC_2105b.exe" /INCREMENTAL /ILK:"cmTC_2105b.dir\\Debug\\cmTC_2105b.ilk" /NOLOGO pthreads.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-7t4i02/Debug/cmTC_2105b.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-7t4i02/Debug/cmTC_2105b.lib" /MACHINE:X64  /machine:x64 cmTC_2105b.dir\\Debug\\CheckFunctionExists.obj
+        LINK : fatal error LNK1104: cannot open file 'pthreads.lib' [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7t4i02\\cmTC_2105b.vcxproj]
+        Done Building Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7t4i02\\cmTC_2105b.vcxproj" (default targets) -- FAILED.
         
         Build FAILED.
         
-        "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5ljzuc\\cmTC_bbdd2.vcxproj" (default target) (1) ->
+        "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7t4i02\\cmTC_2105b.vcxproj" (default target) (1) ->
         (Link target) -> 
-          LINK : fatal error LNK1104: cannot open file 'pthreads.lib' [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5ljzuc\\cmTC_bbdd2.vcxproj]
+          LINK : fatal error LNK1104: cannot open file 'pthreads.lib' [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7t4i02\\cmTC_2105b.vcxproj]
         
             0 Warning(s)
             1 Error(s)
@@ -2398,8 +2397,8 @@ events:
     checks:
       - "Looking for pthread_create in pthread"
     directories:
-      source: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-plffoe"
-      binary: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-plffoe"
+      source: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-f8xxmz"
+      binary: "D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-f8xxmz"
     cmakeVariables:
       CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
       CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -2409,41 +2408,41 @@ events:
       variable: "CMAKE_HAVE_PTHREAD_CREATE"
       cached: true
       stdout: |
-        Change Dir: 'D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-plffoe'
+        Change Dir: 'D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-f8xxmz'
         
-        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_f05bc.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_4c9df.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=18.0 /v:n
         MSBuild version 18.4.0+6e61e96ac for .NET Framework
-        Build started 16.03.2026 22:30:53.
+        Build started 19.03.2026 21:16:20.
         
-        Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-plffoe\\cmTC_f05bc.vcxproj" on node 1 (default targets).
+        Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-f8xxmz\\cmTC_4c9df.vcxproj" on node 1 (default targets).
         PrepareForBuild:
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Creating directory "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-plffoe\\Debug\\".
-          Creating directory "cmTC_f05bc.dir\\Debug\\cmTC_f05bc.tlog\\".
+          Creating directory "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-f8xxmz\\Debug\\".
+          Creating directory "cmTC_4c9df.dir\\Debug\\cmTC_4c9df.tlog\\".
         InitializeBuildStatus:
-          Creating "cmTC_f05bc.dir\\Debug\\cmTC_f05bc.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
-          Touching "cmTC_f05bc.dir\\Debug\\cmTC_f05bc.tlog\\unsuccessfulbuild".
+          Creating "cmTC_4c9df.dir\\Debug\\cmTC_4c9df.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_4c9df.dir\\Debug\\cmTC_4c9df.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_f05bc.dir\\Debug\\\\" /Fd"cmTC_f05bc.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-plffoe\\CheckFunctionExists.c"
-          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35726 for x64
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_4c9df.dir\\Debug\\\\" /Fd"cmTC_4c9df.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-f8xxmz\\CheckFunctionExists.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.50.35727 for x64
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_f05bc.dir\\Debug\\\\" /Fd"cmTC_f05bc.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-plffoe\\CheckFunctionExists.c"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_4c9df.dir\\Debug\\\\" /Fd"cmTC_4c9df.dir\\Debug\\vc145.pdb" /external:W1 /TC /errorReport:queue "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-f8xxmz\\CheckFunctionExists.c"
           CheckFunctionExists.c
         Link:
-          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-plffoe\\Debug\\cmTC_f05bc.exe" /INCREMENTAL /ILK:"cmTC_f05bc.dir\\Debug\\cmTC_f05bc.ilk" /NOLOGO pthread.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-plffoe/Debug/cmTC_f05bc.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-plffoe/Debug/cmTC_f05bc.lib" /MACHINE:X64  /machine:x64 cmTC_f05bc.dir\\Debug\\CheckFunctionExists.obj
-        LINK : fatal error LNK1104: cannot open file 'pthread.lib' [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-plffoe\\cmTC_f05bc.vcxproj]
-        Done Building Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-plffoe\\cmTC_f05bc.vcxproj" (default targets) -- FAILED.
+          C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-f8xxmz\\Debug\\cmTC_4c9df.exe" /INCREMENTAL /ILK:"cmTC_4c9df.dir\\Debug\\cmTC_4c9df.ilk" /NOLOGO pthread.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-f8xxmz/Debug/cmTC_4c9df.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/Programming/vkgfx-refactor/build/CMakeFiles/CMakeScratch/TryCompile-f8xxmz/Debug/cmTC_4c9df.lib" /MACHINE:X64  /machine:x64 cmTC_4c9df.dir\\Debug\\CheckFunctionExists.obj
+        LINK : fatal error LNK1104: cannot open file 'pthread.lib' [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-f8xxmz\\cmTC_4c9df.vcxproj]
+        Done Building Project "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-f8xxmz\\cmTC_4c9df.vcxproj" (default targets) -- FAILED.
         
         Build FAILED.
         
-        "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-plffoe\\cmTC_f05bc.vcxproj" (default target) (1) ->
+        "D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-f8xxmz\\cmTC_4c9df.vcxproj" (default target) (1) ->
         (Link target) -> 
-          LINK : fatal error LNK1104: cannot open file 'pthread.lib' [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-plffoe\\cmTC_f05bc.vcxproj]
+          LINK : fatal error LNK1104: cannot open file 'pthread.lib' [D:\\Programming\\vkgfx-refactor\\build\\CMakeFiles\\CMakeScratch\\TryCompile-f8xxmz\\cmTC_4c9df.vcxproj]
         
             0 Warning(s)
             1 Error(s)
         
-        Time Elapsed 00:00:00.28
+        Time Elapsed 00:00:00.29
         
       exitCode: 1
   -

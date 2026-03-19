@@ -164,6 +164,8 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
   </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
   <ItemGroup />
   <ItemGroup>
     <ProjectReference Include="D:\Programming\vkgfx-refactor\build\ZERO_CHECK.vcxproj">

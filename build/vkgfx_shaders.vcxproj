@@ -553,6 +553,62 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
+    <CustomBuild Include="D:\Programming\vkgfx-refactor\build\CMakeFiles\e7789abde3a294c2721706a34bcc3774\shadow.vert.spv.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader shadow.vert</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+D:\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/Programming/vkgfx-refactor/build/shaders/shadow.vert.spv D:/Programming/vkgfx-refactor/shaders/shadow.vert
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\Programming\vkgfx-refactor\shaders\shadow.vert;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\Programming\vkgfx-refactor\build\shaders\shadow.vert.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader shadow.vert</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+D:\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/Programming/vkgfx-refactor/build/shaders/shadow.vert.spv D:/Programming/vkgfx-refactor/shaders/shadow.vert
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\Programming\vkgfx-refactor\shaders\shadow.vert;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\Programming\vkgfx-refactor\build\shaders\shadow.vert.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader shadow.vert</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+D:\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/Programming/vkgfx-refactor/build/shaders/shadow.vert.spv D:/Programming/vkgfx-refactor/shaders/shadow.vert
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\Programming\vkgfx-refactor\shaders\shadow.vert;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\Programming\vkgfx-refactor\build\shaders\shadow.vert.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader shadow.vert</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+D:\VulkanSDK\1.4.341.1\Bin\glslc.exe -o D:/Programming/vkgfx-refactor/build/shaders/shadow.vert.spv D:/Programming/vkgfx-refactor/shaders/shadow.vert
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\Programming\vkgfx-refactor\shaders\shadow.vert;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\Programming\vkgfx-refactor\build\shaders\shadow.vert.spv</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
     <CustomBuild Include="D:\Programming\vkgfx-refactor\build\CMakeFiles\e7789abde3a294c2721706a34bcc3774\tonemap.frag.spv.rule">
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader tonemap.frag</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
@@ -674,7 +730,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\Programming\vkgfx-refactor\build\shaders\brdf_lut.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\equirect_to_cube.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\irradiance.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\prefilter.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.vert.spv;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\Programming\vkgfx-refactor\build\shaders\brdf_lut.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\equirect_to_cube.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\irradiance.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\prefilter.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\shadow.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.vert.spv;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\Programming\vkgfx-refactor\build\CMakeFiles\vkgfx_shaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</VerifyInputsAndOutputsExist>
@@ -686,7 +742,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\Programming\vkgfx-refactor\build\shaders\brdf_lut.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\equirect_to_cube.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\irradiance.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\prefilter.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.vert.spv;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\Programming\vkgfx-refactor\build\shaders\brdf_lut.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\equirect_to_cube.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\irradiance.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\prefilter.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\shadow.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.vert.spv;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\Programming\vkgfx-refactor\build\CMakeFiles\vkgfx_shaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</VerifyInputsAndOutputsExist>
@@ -698,7 +754,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\Programming\vkgfx-refactor\build\shaders\brdf_lut.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\equirect_to_cube.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\irradiance.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\prefilter.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.vert.spv;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\Programming\vkgfx-refactor\build\shaders\brdf_lut.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\equirect_to_cube.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\irradiance.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\prefilter.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\shadow.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.vert.spv;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\Programming\vkgfx-refactor\build\CMakeFiles\vkgfx_shaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</VerifyInputsAndOutputsExist>
@@ -710,7 +766,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\Programming\vkgfx-refactor\build\shaders\brdf_lut.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\equirect_to_cube.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\irradiance.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\prefilter.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.vert.spv;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\Programming\vkgfx-refactor\build\shaders\brdf_lut.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\equirect_to_cube.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\gbuffer.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\irradiance.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\lighting.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\prefilter.comp.spv;D:\Programming\vkgfx-refactor\build\shaders\shadow.vert.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.frag.spv;D:\Programming\vkgfx-refactor\build\shaders\tonemap.vert.spv;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\Programming\vkgfx-refactor\build\CMakeFiles\vkgfx_shaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</VerifyInputsAndOutputsExist>
