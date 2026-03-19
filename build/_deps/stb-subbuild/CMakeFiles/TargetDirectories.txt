@@ -1,3 +1,0 @@
-D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/stb-populate.dir
-D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/ALL_BUILD.dir
-D:/Programming/vkgfx-refactor/build/_deps/stb-subbuild/CMakeFiles/ZERO_CHECK.dir

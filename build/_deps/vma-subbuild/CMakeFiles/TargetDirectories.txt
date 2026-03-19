@@ -1,3 +1,0 @@
-D:/Programming/vkgfx-refactor/build/_deps/vma-subbuild/CMakeFiles/vma-populate.dir
-D:/Programming/vkgfx-refactor/build/_deps/vma-subbuild/CMakeFiles/ALL_BUILD.dir
-D:/Programming/vkgfx-refactor/build/_deps/vma-subbuild/CMakeFiles/ZERO_CHECK.dir
