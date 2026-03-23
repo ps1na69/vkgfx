@@ -188,7 +188,8 @@ std::shared_ptr<Mesh> Mesh::createSphere(float radius, uint32_t stacks,
         for (uint32_t j = 0; j < slices; ++j) {
             uint32_t a = i * (slices + 1) + j;
             uint32_t b = a + slices + 1;
-            indices.insert(indices.end(), {a, b, a + 1, b, b + 1, a + 1});
+            // CCW winding (verified by outward-normal dot test):
+            indices.insert(indices.end(), {a, a + 1, b, a + 1, b + 1, b});
         }
     }
 

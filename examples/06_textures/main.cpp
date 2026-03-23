@@ -70,6 +70,7 @@ int main() {
     cfg.sun.direction[1] = -1.0f;
     cfg.sun.direction[2] = -0.3f;
 
+
     Renderer   renderer(window, cfg);
     Context&   ctx = renderer.context();
     TextureCache textures(ctx);
@@ -77,8 +78,19 @@ int main() {
     // ── Auto-scan assets/textures/ ────────────────────────────────────────────
     // Search several candidate locations (CWD, relative paths from build dir)
     fs::path texDir;
-    for (auto& candidate : {"assets/textures", "../../assets/textures",
-                             "../assets/textures", "assets"}) {
+    // Search from the exe location upward — exe is inside build/examples/06.../Debug/
+    // so project root (where assets/ lives) is 4 levels up.
+    for (auto& candidate : {
+            "assets/textures",        // next to exe (POST_BUILD copied here)
+            "../assets/textures",
+            "../../assets/textures",
+            "../../../assets/textures",
+            "../../../../assets/textures",  // build/examples/06.../Debug/ → project root
+            "../../../../../assets/textures",
+            "assets",                 // flat layout fallback
+            "../../assets",
+            "../../../../assets",
+        }) {
         if (fs::exists(candidate)) { texDir = candidate; break; }
     }
 
