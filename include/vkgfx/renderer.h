@@ -115,6 +115,7 @@ private:
     AllocatedImage m_fallbackWhite{};   // albedo fallback (1,1,1,1)
     AllocatedImage m_fallbackNormal{};  // normal fallback (0.5,0.5,1.0 = flat normal)
     AllocatedImage m_fallbackRMA{};     // RMA fallback (0.5 roughness, 0 metallic, 1 ao)
+    AllocatedImage m_fallbackCube{};    // 1x1 black cube map — satisfies unwritten IBL set
 
     VkHandle<VkDescriptorPool> m_descriptorPool;
 

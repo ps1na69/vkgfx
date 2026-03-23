@@ -1,0 +1,27 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/Programming/vkgfx/build/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/_deps/glfw-build/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/_deps/glfw-build/src/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/_deps/glm-build/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/_deps/glm-build/glm/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/_deps/vma-build/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/_deps/json-build/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/_deps/tinyobjloader-build/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/examples/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/examples/01_window/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/examples/02_triangle/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/examples/03_model_loading/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/examples/04_camera/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/examples/05_lighting/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/examples/06_textures/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/examples/07_input/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/examples/08_collision/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/examples/09_scene/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/tests/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/_deps/catch2-build/cmake_install.cmake",
+		"D:/Programming/vkgfx/build/_deps/catch2-build/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

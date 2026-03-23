@@ -1,0 +1,1 @@
+vkgfx_add_example(ex_09_scene)

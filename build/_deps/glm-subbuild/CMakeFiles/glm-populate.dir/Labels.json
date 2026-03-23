@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/glm-populate"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/13057e0f267756547eabd775f53a6459/glm-populate.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/5f9643c4a1d20cedb4d210a672f70c36/glm-populate-complete.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/e2a6dbd11dc924fd39e533777453a860/glm-populate-build.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/e2a6dbd11dc924fd39e533777453a860/glm-populate-configure.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/e2a6dbd11dc924fd39e533777453a860/glm-populate-download.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/e2a6dbd11dc924fd39e533777453a860/glm-populate-install.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/e2a6dbd11dc924fd39e533777453a860/glm-populate-mkdir.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/e2a6dbd11dc924fd39e533777453a860/glm-populate-patch.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/e2a6dbd11dc924fd39e533777453a860/glm-populate-test.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/glm-subbuild/CMakeFiles/e2a6dbd11dc924fd39e533777453a860/glm-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"glm-populate"
+		],
+		"name" : "glm-populate"
+	}
+}

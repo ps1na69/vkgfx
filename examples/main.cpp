@@ -43,7 +43,7 @@ static void printHelp(bool hdrFound) {
 int main(int argc, char** argv) {
     // ── Config ────────────────────────────────────────────────────────────────
     RendererConfig cfg;
-    cfg.vsync              = false;
+    cfg.vsync              = true;
     cfg.ibl.envMapSize     = 512;
     cfg.ibl.irradianceSize = 32;
     cfg.ibl.intensity      = 1.0f;
@@ -85,8 +85,7 @@ int main(int argc, char** argv) {
     printHelp(hdrFound);
 
     // ── Window + Renderer ─────────────────────────────────────────────────────
-    Window   window("vkgfx — deferred PBR + IBL", 1920, 1080);
-
+    Window   window("vkgfx — deferred PBR + IBL", 1280, 720);
     Renderer renderer(window, cfg);
     Context& ctx = renderer.context();
 
@@ -147,6 +146,21 @@ int main(int argc, char** argv) {
             meshes.push_back(s);
         }
     }
+
+    // ── Collision world ───────────────────────────────────────────────────────
+    CollisionWorld physics(4.f);
+
+    // Register all spheres with sphere colliders
+    for (auto& m : meshes) {
+        auto& obj  = physics.add(m.get(), Collider::fitSphere(*m), false);
+        obj.tag    = "sphere";
+    }
+
+    // Collision callback — print on contact (throttled)
+    int contactCount = 0;
+    physics.setOnContact([&](const CollisionEvent& ev) {
+        ++contactCount; // counted per frame, not printed every frame (too spammy)
+    });
 
     // ── Sun ───────────────────────────────────────────────────────────────────
     auto sun = std::make_shared<DirectionalLight>();
@@ -265,6 +279,26 @@ int main(int argc, char** argv) {
                 OY + height,
                 std::sin(angle) * orbitR
             });
+        }
+
+        // ── Collision update (separates overlapping objects) ─────────────────
+        contactCount = 0;
+        physics.update(true);  // applyResponse=true pushes objects apart
+
+        // ── Left-click to ray cast from camera ────────────────────────────────
+        // Tab unlocks cursor; while unlocked, click fires a ray
+        if (!window.isCursorLocked() &&
+            glfwGetMouseButton(window.handle(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+            // Cast ray along camera's forward direction
+            glm::mat4 view  = cam.view();
+            glm::vec3 fwd   = glm::normalize(-glm::vec3(view[0][2], view[1][2], view[2][2]));
+            auto hit = physics.castRay(cam.position(), fwd, 100.f);
+            if (hit) {
+                std::cout << "[ray] hit mesh at distance "
+                          << hit.t << "  point " << hit.point.x << ","
+                          << hit.point.y << "," << hit.point.z << "
+";
+            }
         }
 
         renderer.render(scene);

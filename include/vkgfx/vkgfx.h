@@ -12,3 +12,4 @@
 #include "camera.h"
 #include "scene.h"
 #include "renderer.h"
+#include "collision.h"

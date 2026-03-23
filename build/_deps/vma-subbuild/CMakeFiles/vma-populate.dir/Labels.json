@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/vma-populate"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/1f96ba2726fd66974d28a69369f8a4c4/vma-populate.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/c5ce59daeeda3089dd629f98b26af74a/vma-populate-complete.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/35027920468304894a8acef0b56062f7/vma-populate-build.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/35027920468304894a8acef0b56062f7/vma-populate-configure.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/35027920468304894a8acef0b56062f7/vma-populate-download.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/35027920468304894a8acef0b56062f7/vma-populate-install.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/35027920468304894a8acef0b56062f7/vma-populate-mkdir.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/35027920468304894a8acef0b56062f7/vma-populate-patch.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/35027920468304894a8acef0b56062f7/vma-populate-test.rule"
+		},
+		{
+			"file" : "D:/Programming/vkgfx/build/_deps/vma-subbuild/CMakeFiles/35027920468304894a8acef0b56062f7/vma-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"vma-populate"
+		],
+		"name" : "vma-populate"
+	}
+}

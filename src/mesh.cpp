@@ -201,9 +201,11 @@ std::shared_ptr<Mesh> Mesh::createSphere(float radius, uint32_t stacks,
 
 std::shared_ptr<Mesh> Mesh::createBox(glm::vec3 h, Context& ctx) {
     struct FaceData { glm::vec3 n, t; glm::vec3 corners[4]; };
+    // Corner order is CCW when viewed from outside each face (VK_FRONT_FACE_COUNTER_CLOCKWISE).
+    // +X and -X required vertex reversal — verified by cross-product winding check.
     FaceData faces[6] = {
-        {{ 1,0,0},{0,0,-1}, {{ h.x,-h.y,-h.z},{ h.x,-h.y, h.z},{ h.x, h.y, h.z},{ h.x, h.y,-h.z}}},
-        {{-1,0,0},{0,0, 1}, {{-h.x,-h.y, h.z},{-h.x,-h.y,-h.z},{-h.x, h.y,-h.z},{-h.x, h.y, h.z}}},
+        {{ 1,0,0},{0,0,-1}, {{ h.x,-h.y,-h.z},{ h.x, h.y,-h.z},{ h.x, h.y, h.z},{ h.x,-h.y, h.z}}},
+        {{-1,0,0},{0,0, 1}, {{-h.x,-h.y, h.z},{-h.x, h.y, h.z},{-h.x, h.y,-h.z},{-h.x,-h.y,-h.z}}},
         {{ 0,1,0},{1,0, 0}, {{-h.x, h.y, h.z},{ h.x, h.y, h.z},{ h.x, h.y,-h.z},{-h.x, h.y,-h.z}}},
         {{ 0,-1,0},{1,0,0}, {{-h.x,-h.y,-h.z},{ h.x,-h.y,-h.z},{ h.x,-h.y, h.z},{-h.x,-h.y, h.z}}},
         {{ 0,0,1},{1,0, 0}, {{-h.x,-h.y, h.z},{ h.x,-h.y, h.z},{ h.x, h.y, h.z},{-h.x, h.y, h.z}}},
@@ -226,6 +228,25 @@ std::shared_ptr<Mesh> Mesh::createBox(glm::vec3 h, Context& ctx) {
         }
         indices.insert(indices.end(), {base,base+1,base+2, base,base+2,base+3});
     }
+
+    auto mesh = std::shared_ptr<Mesh>(new Mesh());
+    mesh->upload(ctx, verts, indices);
+    return mesh;
+}
+
+// ── createTriangle ───────────────────────────────────────────────────────────
+
+std::shared_ptr<Mesh> Mesh::createTriangle(glm::vec3 a, glm::vec3 b,
+                                            glm::vec3 c, Context& ctx) {
+    glm::vec3 n = glm::normalize(glm::cross(b - a, c - a));
+    glm::vec3 t = glm::normalize(b - a);
+
+    std::vector<Vertex> verts = {
+        {a, n, glm::vec4(t, 1.f), {0.f, 0.f}},
+        {b, n, glm::vec4(t, 1.f), {1.f, 0.f}},
+        {c, n, glm::vec4(t, 1.f), {0.5f, 1.f}},
+    };
+    std::vector<uint32_t> indices = {0, 1, 2};
 
     auto mesh = std::shared_ptr<Mesh>(new Mesh());
     mesh->upload(ctx, verts, indices);

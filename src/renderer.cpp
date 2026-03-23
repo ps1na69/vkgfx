@@ -632,6 +632,31 @@ void Renderer::initShadowPass() {
     m_shadowMap.view = m_ctx->createImageView(
         m_shadowMap.image, depthFmt, VK_IMAGE_ASPECT_DEPTH_BIT);
 
+    // Transition shadow map to SHADER_READ_ONLY_OPTIMAL immediately.
+    // The render pass transitions it back to DEPTH_STENCIL on load (initialLayout=UNDEFINED),
+    // then to SHADER_READ_ONLY on store (finalLayout=SHADER_READ_ONLY_OPTIMAL).
+    // But when recordShadowPass() is skipped (no directional light), the image never
+    // goes through the render pass — so it must start in SHADER_READ_ONLY_OPTIMAL
+    // to match what the lighting pass descriptor expects.
+    {
+        VkCommandBuffer cmd = m_ctx->beginOneShot();
+        VkImageMemoryBarrier b{};
+        b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image               = m_shadowMap.image;
+        b.srcAccessMask       = 0;
+        b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        b.subresourceRange    = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &b);
+        m_ctx->endOneShot(cmd);
+    }
+
     // Comparison sampler for sampler2DShadow — hardware PCF
     VkSamplerCreateInfo sci{};
     sci.sType          = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -647,7 +672,9 @@ void Renderer::initShadowPass() {
     sci.maxLod         = 1.f;
     vkCreateSampler(m_ctx->device(), &sci, nullptr, &m_shadowSampler);
 
-    // Depth-only render pass
+    // Depth-only render pass.
+    // initialLayout = SHADER_READ_ONLY_OPTIMAL because we pre-transition the shadow map
+    // at init time so it is always in a valid state even when this pass is skipped.
     VkAttachmentDescription depthAtt{};
     depthAtt.format         = depthFmt;
     depthAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
@@ -655,7 +682,7 @@ void Renderer::initShadowPass() {
     depthAtt.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
     depthAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depthAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAtt.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAtt.initialLayout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     depthAtt.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference depRef{0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
@@ -886,6 +913,68 @@ void Renderer::initDefaultTextures() {
     // RMA fallback: roughness=0.5 (128), metallic=0 (0), ao=1 (255)
     m_fallbackRMA    = upload1x1(128,   0, 255, 255);
 
+    // ── 1×1 black cube map for the dummy IBL descriptor set ─────────────────
+    // All 6 faces = black (0,0,0,255). Used to write valid descriptors into
+    // the IBL set (set=2) when IBL is disabled — Vulkan forbids unwritten descriptors.
+    {
+        m_fallbackCube = m_ctx->allocateImage(
+            {1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            1, 6, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
+
+        // Upload 6 faces of black pixels
+        const uint8_t black[4] = {0, 0, 0, 255};
+        VkDeviceSize faceSize = 4;
+        AllocatedBuffer staging = m_ctx->allocateBuffer(faceSize * 6,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+        void* mapped = nullptr;
+        vmaMapMemory(m_ctx->vma(), static_cast<VmaAllocation>(staging.allocation), &mapped);
+        for (int i = 0; i < 6; ++i)
+            std::memcpy(static_cast<uint8_t*>(mapped) + i * faceSize, black, 4);
+        vmaUnmapMemory(m_ctx->vma(), static_cast<VmaAllocation>(staging.allocation));
+
+        VkCommandBuffer cmd = m_ctx->beginOneShot();
+
+        VkImageMemoryBarrier b1{};
+        b1.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b1.oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
+        b1.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b1.srcAccessMask    = 0;
+        b1.dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b1.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b1.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b1.image            = m_fallbackCube.image;
+        b1.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b1);
+
+        // One copy region per face
+        VkBufferImageCopy regions[6]{};
+        for (int i = 0; i < 6; ++i) {
+            regions[i].bufferOffset      = static_cast<VkDeviceSize>(i) * faceSize;
+            regions[i].imageSubresource  = {VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                                             static_cast<uint32_t>(i), 1};
+            regions[i].imageExtent       = {1, 1, 1};
+        }
+        vkCmdCopyBufferToImage(cmd, staging.buffer, m_fallbackCube.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 6, regions);
+
+        VkImageMemoryBarrier b2 = b1;
+        b2.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b2.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b2.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b2);
+
+        m_ctx->endOneShot(cmd);
+        m_ctx->destroyBuffer(staging);
+
+        m_fallbackCube.view = m_ctx->createImageView(
+            m_fallbackCube.image, VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_ASPECT_COLOR_BIT, 1, 6, VK_IMAGE_VIEW_TYPE_CUBE);
+    }
+
     // Shared nearest-linear sampler for fallback textures
     VkSamplerCreateInfo sci{};
     sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1029,11 +1118,10 @@ void Renderer::initPerFrameResources() {
             dsai.pSetLayouts        = &m_tonemapSetLayout;
             vkAllocateDescriptorSets(m_ctx->device(), &dsai, &f.tonemapSet);
         }
-        // IBL set (set=2 in lighting pass) — always allocate so the pipeline
-        // layout is always fully satisfied even when IBL is disabled.
-        // initIBL() will overwrite this with real IBL descriptors if IBL is on.
-        // When IBL is off, iblIntensity=0 in the shader skips the IBL calculation,
-        // but the set must still be bound to a valid (even unwritten) descriptor set.
+        // IBL set (set=2 in lighting pass) — always allocate AND write valid fallback
+        // descriptors. Vulkan validation error fires even in dead branches if a
+        // bound descriptor was never written. Use the 1×1 black cube fallback.
+        // initIBL() overwrites this with real cube maps when IBL is enabled.
         {
             VkDescriptorSetAllocateInfo dsai{};
             dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1041,6 +1129,36 @@ void Renderer::initPerFrameResources() {
             dsai.descriptorSetCount = 1;
             dsai.pSetLayouts        = &m_iblSetLayout;
             vkAllocateDescriptorSets(m_ctx->device(), &dsai, &f.iblSet);
+
+            // Write fallback cube descriptors (black 1x1) for bindings 0,1,2
+            // and a plain 2D fallback for the BRDF LUT (binding 2).
+            VkDescriptorImageInfo cubeInfo{};
+            cubeInfo.sampler     = m_fallbackSampler;
+            cubeInfo.imageView   = m_fallbackCube.view;
+            cubeInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            VkDescriptorImageInfo lutInfo{};
+            lutInfo.sampler     = m_fallbackSampler;
+            lutInfo.imageView   = m_fallbackWhite.view;
+            lutInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            VkWriteDescriptorSet iblWrites[3]{};
+            // binding 0: irradianceCube
+            iblWrites[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            iblWrites[0].dstSet          = f.iblSet;
+            iblWrites[0].dstBinding      = 0;
+            iblWrites[0].descriptorCount = 1;
+            iblWrites[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            iblWrites[0].pImageInfo      = &cubeInfo;
+            // binding 1: prefilteredCube
+            iblWrites[1]            = iblWrites[0];
+            iblWrites[1].dstBinding = 1;
+            // binding 2: brdfLut (2D)
+            iblWrites[2]            = iblWrites[0];
+            iblWrites[2].dstBinding = 2;
+            iblWrites[2].pImageInfo = &lutInfo;
+
+            vkUpdateDescriptorSets(m_ctx->device(), 3, iblWrites, 0, nullptr);
         }
 
         // Write gbufferSceneSet: scene UBO
@@ -1164,9 +1282,11 @@ void Renderer::applyConfig(const RendererConfig& cfg) {
     if (iblChanged) {
         vkDeviceWaitIdle(m_ctx->device());
         m_ibl->destroy();
-        // Re-allocate dummy IBL sets so the pipeline layout's set=2 remains valid.
-        // initIBL() below will overwrite them with real data if IBL is enabled.
+        // After destroying IBL the old cube map views are gone.
+        // Re-write fallback descriptors into every iblSet so set=2 is always valid.
+        // If IBL is re-enabled, initIBL() will overwrite with real views.
         for (auto& f : m_frames) {
+            // Allocate if for some reason not yet allocated
             if (f.iblSet == VK_NULL_HANDLE) {
                 VkDescriptorSetAllocateInfo dsai{};
                 dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1175,6 +1295,19 @@ void Renderer::applyConfig(const RendererConfig& cfg) {
                 dsai.pSetLayouts        = &m_iblSetLayout;
                 vkAllocateDescriptorSets(m_ctx->device(), &dsai, &f.iblSet);
             }
+            // Always re-write fallback — previous real IBL views are now dead
+            VkDescriptorImageInfo ci{m_fallbackSampler, m_fallbackCube.view,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkDescriptorImageInfo li{m_fallbackSampler, m_fallbackWhite.view,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet ws[3]{};
+            ws[0].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            ws[0].dstSet=f.iblSet; ws[0].dstBinding=0;
+            ws[0].descriptorCount=1; ws[0].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            ws[0].pImageInfo=&ci;
+            ws[1]=ws[0]; ws[1].dstBinding=1;
+            ws[2]=ws[0]; ws[2].dstBinding=2; ws[2].pImageInfo=&li;
+            vkUpdateDescriptorSets(m_ctx->device(), 3, ws, 0, nullptr);
         }
         if (m_cfg.ibl.enabled) initIBL();
     }
@@ -1554,6 +1687,7 @@ void Renderer::shutdown() {
     m_ctx->destroyImage(m_fallbackWhite);
     m_ctx->destroyImage(m_fallbackNormal);
     m_ctx->destroyImage(m_fallbackRMA);
+    m_ctx->destroyImage(m_fallbackCube);
 
     m_ibl->destroy();
 

@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\70863771625142df2f6b847442057dc0\stb-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\70863771625142df2f6b847442057dc0\stb-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\70863771625142df2f6b847442057dc0\stb-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\70863771625142df2f6b847442057dc0\stb-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\70863771625142df2f6b847442057dc0\stb-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\70863771625142df2f6b847442057dc0\stb-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\70863771625142df2f6b847442057dc0\stb-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\70863771625142df2f6b847442057dc0\stb-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\efb6a9e0426283b1028011083765df52\stb-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\a4c294ab2834dba332c86ec8855283b1\stb-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\Programming\vkgfx\build\_deps\stb-subbuild\CMakeFiles\stb-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{0348B5AD-9F2C-3932-9563-E721441BDF49}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

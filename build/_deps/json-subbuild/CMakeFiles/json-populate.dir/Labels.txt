@@ -1,0 +1,14 @@
+# Target labels
+ json-populate
+# Source files and their labels
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/json-populate
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/9485980da500d8d8466f46fb7369bf72/json-populate.rule
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/48f1c97375e311216f85fff341746aa3/json-populate-complete.rule
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/a0e3e27f87cfdc86ee44d569160f943d/json-populate-build.rule
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/a0e3e27f87cfdc86ee44d569160f943d/json-populate-configure.rule
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/a0e3e27f87cfdc86ee44d569160f943d/json-populate-download.rule
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/a0e3e27f87cfdc86ee44d569160f943d/json-populate-install.rule
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/a0e3e27f87cfdc86ee44d569160f943d/json-populate-mkdir.rule
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/a0e3e27f87cfdc86ee44d569160f943d/json-populate-patch.rule
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/a0e3e27f87cfdc86ee44d569160f943d/json-populate-test.rule
+D:/Programming/vkgfx/build/_deps/json-subbuild/CMakeFiles/a0e3e27f87cfdc86ee44d569160f943d/json-populate-update.rule

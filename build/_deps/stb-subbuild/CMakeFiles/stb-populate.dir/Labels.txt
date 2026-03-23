@@ -1,0 +1,14 @@
+# Target labels
+ stb-populate
+# Source files and their labels
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/stb-populate
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/a4c294ab2834dba332c86ec8855283b1/stb-populate.rule
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/efb6a9e0426283b1028011083765df52/stb-populate-complete.rule
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/70863771625142df2f6b847442057dc0/stb-populate-build.rule
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/70863771625142df2f6b847442057dc0/stb-populate-configure.rule
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/70863771625142df2f6b847442057dc0/stb-populate-download.rule
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/70863771625142df2f6b847442057dc0/stb-populate-install.rule
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/70863771625142df2f6b847442057dc0/stb-populate-mkdir.rule
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/70863771625142df2f6b847442057dc0/stb-populate-patch.rule
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/70863771625142df2f6b847442057dc0/stb-populate-test.rule
+D:/Programming/vkgfx/build/_deps/stb-subbuild/CMakeFiles/70863771625142df2f6b847442057dc0/stb-populate-update.rule

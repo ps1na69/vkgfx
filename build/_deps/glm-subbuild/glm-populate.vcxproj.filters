@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\e2a6dbd11dc924fd39e533777453a860\glm-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\e2a6dbd11dc924fd39e533777453a860\glm-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\e2a6dbd11dc924fd39e533777453a860\glm-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\e2a6dbd11dc924fd39e533777453a860\glm-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\e2a6dbd11dc924fd39e533777453a860\glm-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\e2a6dbd11dc924fd39e533777453a860\glm-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\e2a6dbd11dc924fd39e533777453a860\glm-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\e2a6dbd11dc924fd39e533777453a860\glm-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\5f9643c4a1d20cedb4d210a672f70c36\glm-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\13057e0f267756547eabd775f53a6459\glm-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\Programming\vkgfx\build\_deps\glm-subbuild\CMakeFiles\glm-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{4E2B968F-9752-369C-9351-35B54850DE01}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

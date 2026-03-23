@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\469bb6f6288a1befcff07cedf1b26b9a\catch2-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\469bb6f6288a1befcff07cedf1b26b9a\catch2-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\469bb6f6288a1befcff07cedf1b26b9a\catch2-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\469bb6f6288a1befcff07cedf1b26b9a\catch2-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\469bb6f6288a1befcff07cedf1b26b9a\catch2-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\469bb6f6288a1befcff07cedf1b26b9a\catch2-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\469bb6f6288a1befcff07cedf1b26b9a\catch2-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\469bb6f6288a1befcff07cedf1b26b9a\catch2-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\d204a226bb6cbc4b4c4e6fa0a861761d\catch2-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\023344fc443c1e45b49db91db1c9b1ff\catch2-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\Programming\vkgfx\build\_deps\catch2-subbuild\CMakeFiles\catch2-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{FB5288A9-3BC9-35E9-A627-2D22ADCD3A78}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

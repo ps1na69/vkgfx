@@ -33,7 +33,10 @@ public:
     static std::shared_ptr<Mesh> loadOBJ    (const std::string& path, Context& ctx);
     static std::shared_ptr<Mesh> createSphere(float radius, uint32_t stacks,
                                               uint32_t slices, Context& ctx);
-    static std::shared_ptr<Mesh> createBox  (glm::vec3 halfExtents, Context& ctx);
+    static std::shared_ptr<Mesh> createBox    (glm::vec3 halfExtents, Context& ctx);
+    /// Single triangle with given world-space vertex positions.
+    static std::shared_ptr<Mesh> createTriangle(glm::vec3 a, glm::vec3 b,
+                                                glm::vec3 c, Context& ctx);
 
     [[nodiscard]] bool            uploaded()     const { return m_uploaded; }
     [[nodiscard]] uint32_t        indexCount()   const { return m_indexCount; }
