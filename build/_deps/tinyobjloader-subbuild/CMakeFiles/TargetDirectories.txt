@@ -1,3 +1,0 @@
-D:/Programming/vkgfx/build/_deps/tinyobjloader-subbuild/CMakeFiles/tinyobjloader-populate.dir
-D:/Programming/vkgfx/build/_deps/tinyobjloader-subbuild/CMakeFiles/ALL_BUILD.dir
-D:/Programming/vkgfx/build/_deps/tinyobjloader-subbuild/CMakeFiles/ZERO_CHECK.dir

@@ -1,3 +1,0 @@
-D:/Programming/vkgfx/build/_deps/glfw-subbuild/CMakeFiles/glfw-populate.dir
-D:/Programming/vkgfx/build/_deps/glfw-subbuild/CMakeFiles/ALL_BUILD.dir
-D:/Programming/vkgfx/build/_deps/glfw-subbuild/CMakeFiles/ZERO_CHECK.dir
