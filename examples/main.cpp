@@ -296,8 +296,7 @@ int main(int argc, char** argv) {
             if (hit) {
                 std::cout << "[ray] hit mesh at distance "
                           << hit.t << "  point " << hit.point.x << ","
-                          << hit.point.y << "," << hit.point.z << "
-";
+                          << hit.point.y << "," << hit.point.z << "\n";
             }
         }
 

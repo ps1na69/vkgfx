@@ -55,6 +55,7 @@ add_subdirectory(03_model_loading)
 add_subdirectory(04_camera)
 add_subdirectory(05_lighting)
 add_subdirectory(06_textures)
+
 add_subdirectory(07_input)
 add_subdirectory(08_collision)
 add_subdirectory(09_scene)
