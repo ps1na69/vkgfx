@@ -43,7 +43,7 @@ static void printHelp(bool hdrFound) {
 int main(int argc, char** argv) {
     // ── Config ────────────────────────────────────────────────────────────────
     RendererConfig cfg;
-    cfg.vsync              = true;
+    cfg.vsync              = false;
     cfg.ibl.envMapSize     = 512;
     cfg.ibl.irradianceSize = 32;
     cfg.ibl.intensity      = 1.0f;
@@ -54,7 +54,6 @@ int main(int argc, char** argv) {
     cfg.sun.intensity      = 4.0f;
     cfg.sun.color[0] = cfg.sun.color[1] = cfg.sun.color[2] = 1.f;
     cfg.gbufferDebug       = GBufferDebugView::None;
-    cfg.vsync = false;
 
     if (argc > 1) cfg = RendererConfig::fromFile(argv[1]);
 
@@ -86,9 +85,10 @@ int main(int argc, char** argv) {
     printHelp(hdrFound);
 
     // ── Window + Renderer ─────────────────────────────────────────────────────
-    Window   window("vkgfx — deferred PBR + IBL", 1280, 720);
+    Window   window("vkgfx — deferred PBR + IBL", 1920, 1080);
     Renderer renderer(window, cfg);
     Context& ctx = renderer.context();
+    window.setFullscreen(true);
 
     // ── Camera ────────────────────────────────────────────────────────────────
     Camera cam;

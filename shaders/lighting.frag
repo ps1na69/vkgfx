@@ -118,12 +118,12 @@ vec3 worldPosFromDepth(float depth) {
     return world.xyz / world.w;
 }
 
-// PCF shadow — 3×3 kernel, sampler2DShadow does hardware compare per tap
-float shadowPCF(vec3 coord) {
+// PCF shadow — 3×3 kernel, sampler2DShadow does hardware compare per tap.
+// bias is slope-scaled by the caller to avoid acne on curved surfaces.
+float shadowPCF(vec3 coord, float bias) {
     if (coord.z >= 1.0) return 1.0;
-    float shadow  = 0.0;
-    vec2  texel   = 1.0 / textureSize(shadowMap, 0);
-    float bias    = 0.005;
+    float shadow = 0.0;
+    vec2  texel  = 1.0 / textureSize(shadowMap, 0);
     for (int x = -1; x <= 1; ++x)
         for (int y = -1; y <= 1; ++y)
             shadow += texture(shadowMap,
@@ -189,8 +189,17 @@ void main() {
 
     // ── Shadow ────────────────────────────────────────────────────────────────
     float shadow = 1.0;
-    if (shadowOn != 0u && sunEnabled != 0u)
-        shadow = shadowPCF(shadowXYZ);
+    if (shadowOn != 0u && sunEnabled != 0u) {
+        // Slope-scaled bias: increases at grazing angles to prevent acne on
+        // curved surfaces (sphere self-shadowing). The formula:
+        //   bias = mix(maxBias, minBias, NdotL)
+        // gives a large bias when N and L are nearly perpendicular (where
+        // shadow acne is worst) and a small bias when they are aligned.
+        vec3  sunL   = normalize(-lights.sunDirection.xyz);
+        float NdotL  = max(dot(N, sunL), 0.0);
+        float bias   = mix(0.02, 0.002, NdotL);  // 0.02 at grazing, 0.002 at direct
+        shadow = shadowPCF(shadowXYZ, bias);
+    }
 
     // ── Directional sun ───────────────────────────────────────────────────────
     if (sunEnabled != 0u) {
