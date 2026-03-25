@@ -6,6 +6,7 @@
 #include <string>
 #include <memory>
 #include <unordered_map>
+#include <cstdint>
 
 namespace vkgfx {
 
@@ -50,6 +51,15 @@ public:
     /// Returns nullptr and logs error if path does not exist.
     std::shared_ptr<Texture> load(const std::string& path, TextureDesc desc = {});
 
+    /// Upload a texture from already-decoded RGBA8 pixel data.
+    /// `width` and `height` are pixel dimensions.
+    /// Not cached by path — caller owns the returned shared_ptr.
+    /// Use for embedded glTF images or runtime-generated textures.
+    std::shared_ptr<Texture> loadFromMemory(const uint8_t* rgba8,
+                                             uint32_t       width,
+                                             uint32_t       height,
+                                             TextureDesc    desc = {});
+
     /// Create a 1×1 solid-colour fallback texture (for missing maps).
     std::shared_ptr<Texture> solid(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255);
 
@@ -58,6 +68,8 @@ public:
 private:
     std::shared_ptr<Texture> uploadLDR(const std::string& path, const TextureDesc& desc);
     std::shared_ptr<Texture> uploadHDR(const std::string& path, const TextureDesc& desc);
+    std::shared_ptr<Texture> uploadRGBA8(const uint8_t* rgba8, uint32_t w, uint32_t h,
+                                          const TextureDesc& desc);
     VkSampler makeSampler(uint32_t mipLevels);
 
     Context&  m_ctx;

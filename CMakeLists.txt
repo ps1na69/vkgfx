@@ -71,11 +71,9 @@ FetchContent_Declare(vma
     GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
     GIT_TAG        v3.1.0
     GIT_SHALLOW    TRUE)
-# VMA only needs its include dir; disable its own install rules
 set(VMA_BUILD_SAMPLES         OFF CACHE BOOL "" FORCE)
 set(VMA_BUILD_DOCUMENTATION   OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(vma)
-# VMA v3 provides target GPUOpen::VulkanMemoryAllocator (header-only)
 
 # ── stb ───────────────────────────────────────────────────────────────────────
 message(STATUS "vkgfx: fetching stb")
@@ -84,7 +82,6 @@ FetchContent_Declare(stb
     GIT_TAG        master
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(stb)
-# stb has no CMake — expose its source dir as an include path
 
 # ── nlohmann/json ─────────────────────────────────────────────────────────────
 message(STATUS "vkgfx: fetching nlohmann/json")
@@ -104,6 +101,17 @@ FetchContent_Declare(tinyobjloader
     GIT_SHALLOW    TRUE)
 set(TINYOBJLOADER_BUILD_TEST_LOADER OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(tinyobjloader)
+
+# ── fastgltf ──────────────────────────────────────────────────────────────────
+message(STATUS "vkgfx: fetching fastgltf")
+FetchContent_Declare(fastgltf
+    GIT_REPOSITORY https://github.com/spnda/fastgltf.git
+    GIT_TAG        v0.7.2
+    GIT_SHALLOW    TRUE)
+set(FASTGLTF_COMPILE_AS_CPP20 ON  CACHE BOOL "" FORCE)
+set(FASTGLTF_ENABLE_TESTS     OFF CACHE BOOL "" FORCE)
+set(FASTGLTF_ENABLE_EXAMPLES  OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(fastgltf)
 
 # ── Shader compilation ─────────────────────────────────────────────────────────
 if(Vulkan_GLSLC_EXECUTABLE)
@@ -148,7 +156,7 @@ target_include_directories(vkgfx
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>)
 
-# GLM include dirs (header-only, BUILD_INTERFACE only)
+# GLM include dirs
 if(_GLM_INC)
     target_include_directories(vkgfx PUBLIC $<BUILD_INTERFACE:${_GLM_INC}>)
 endif()
@@ -166,17 +174,20 @@ if(stb_SOURCE_DIR)
     target_include_directories(vkgfx PRIVATE $<BUILD_INTERFACE:${stb_SOURCE_DIR}>)
 endif()
 
-# nlohmann/json target
+# nlohmann/json
 if(TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(vkgfx PRIVATE $<BUILD_INTERFACE:nlohmann_json::nlohmann_json>)
 elseif(json_SOURCE_DIR)
     target_include_directories(vkgfx PRIVATE $<BUILD_INTERFACE:${json_SOURCE_DIR}/include>)
 endif()
 
-# tinyobjloader include dir
+# tinyobjloader
 if(tinyobjloader_SOURCE_DIR)
     target_include_directories(vkgfx PRIVATE $<BUILD_INTERFACE:${tinyobjloader_SOURCE_DIR}>)
 endif()
+
+# fastgltf — link to the imported target; it brings its own include dirs
+target_link_libraries(vkgfx PRIVATE $<BUILD_INTERFACE:fastgltf>)
 
 target_link_libraries(vkgfx
     PUBLIC
@@ -200,9 +211,6 @@ endif()
 
 add_dependencies(vkgfx vkgfx_shaders)
 
-# Copy compiled shaders into the config-specific output dir next to vkgfx.lib
-# so executables that link vkgfx can always find shaders/ relative to their location.
-# This runs every time vkgfx rebuilds, independent of whether examples link.
 add_custom_command(TARGET vkgfx POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "$<TARGET_FILE_DIR:vkgfx>/shaders"

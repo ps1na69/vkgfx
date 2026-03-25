@@ -15,6 +15,7 @@ namespace vkgfx {
 
 class Context;
 class PBRMaterial;
+class TextureCache; // forward-declare for loadGLTF
 
 struct AABB {
     glm::vec3 min{ 1e9f,  1e9f,  1e9f};
@@ -37,6 +38,14 @@ public:
     /// Single triangle with given world-space vertex positions.
     static std::shared_ptr<Mesh> createTriangle(glm::vec3 a, glm::vec3 b,
                                                 glm::vec3 c, Context& ctx);
+
+    /// Load all primitives from a glTF 2.0 file (.gltf or .glb).
+    /// Each glTF primitive becomes one Mesh with its PBRMaterial pre-assigned.
+    /// Node world-transforms are baked into each Mesh's TRS.
+    /// Returns an empty vector and logs to stderr on failure.
+    static std::vector<std::shared_ptr<Mesh>> loadGLTF(const std::string& path,
+                                                        Context& ctx,
+                                                        TextureCache& cache);
 
     [[nodiscard]] bool            uploaded()     const { return m_uploaded; }
     [[nodiscard]] uint32_t        indexCount()   const { return m_indexCount; }
