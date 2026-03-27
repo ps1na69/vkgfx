@@ -106,7 +106,7 @@ FetchContent_MakeAvailable(tinyobjloader)
 message(STATUS "vkgfx: fetching fastgltf")
 FetchContent_Declare(fastgltf
     GIT_REPOSITORY https://github.com/spnda/fastgltf.git
-    GIT_TAG        v0.7.2
+    GIT_TAG        v0.9.0
     GIT_SHALLOW    TRUE)
 set(FASTGLTF_COMPILE_AS_CPP20 ON  CACHE BOOL "" FORCE)
 set(FASTGLTF_ENABLE_TESTS     OFF CACHE BOOL "" FORCE)
