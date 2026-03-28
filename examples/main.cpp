@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
     cfg.sun.intensity      = 4.0f;
     cfg.sun.color[0] = cfg.sun.color[1] = cfg.sun.color[2] = 1.f;
     cfg.gbufferDebug       = GBufferDebugView::None;
+	cfg.msaa = MSAASamples::x8;
 
     if (argc > 1) cfg = RendererConfig::fromFile(argv[1]);
 
@@ -87,7 +88,7 @@ int main(int argc, char** argv) {
     Window   window("vkgfx — deferred PBR + IBL", 1920, 1080);
     Renderer renderer(window, cfg);
     Context& ctx = renderer.context();
-    window.setFullscreen(false);
+    window.setFullscreen(true);
 
     // ── Camera ────────────────────────────────────────────────────────────────
     Camera cam;

@@ -46,8 +46,9 @@ static std::string findModel() {
 int main() {
     using namespace vkgfx;
 
-    Window window("03 – Model Loading", 1280, 720);
+    Window window("03 – Model Loading", 1920, 1080);
     window.setCursorLocked(true);
+    window.setFullscreen(true);
 
     // Detect sky.hdr for IBL
     bool hdrFound = false;
@@ -67,6 +68,7 @@ int main() {
     cfg.sun.direction[0] = -0.4f;
     cfg.sun.direction[1] = -1.0f;
     cfg.sun.direction[2] = -0.3f;
+	cfg.msaa = MSAASamples::x8;
 
     Renderer renderer(window, cfg);
     Context& ctx = renderer.context();
@@ -87,7 +89,7 @@ int main() {
     // Default grey metallic material (overridden if the OBJ has its own materials)
     auto mat = std::make_shared<PBRMaterial>();
     mat->setAlbedo(0.7f, 0.7f, 0.72f)
-        .setRoughness(1.f)
+        .setRoughness(0.5f)
         .setMetallic(1.0f);
     model->setMaterial(mat);
 

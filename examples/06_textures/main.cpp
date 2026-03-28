@@ -59,8 +59,9 @@ static std::string findTexture(const fs::path& dir,
 int main() {
     using namespace vkgfx;
 
-    Window window("06 – Textures", 1280, 720);
+    Window window("06 – Textures", 1920, 1080);
     window.setCursorLocked(true);
+    window.setFullscreen(true);
 
     RendererConfig cfg;
     cfg.ibl.enabled   = false;
@@ -69,6 +70,7 @@ int main() {
     cfg.sun.direction[0] = -0.4f;
     cfg.sun.direction[1] = -1.0f;
     cfg.sun.direction[2] = -0.3f;
+	cfg.msaa = MSAASamples::x8;
 
 
     Renderer   renderer(window, cfg);
@@ -147,7 +149,7 @@ int main() {
         s->setMaterial(m);
         scene.add(s); meshes.push_back(s);
     }
-
+    
     // Centre sphere: albedo only, manual PBR values
     {
         auto s = Mesh::createSphere(0.8f, 32, 32, ctx);
@@ -172,7 +174,7 @@ int main() {
         s->setMaterial(m);
         scene.add(s); meshes.push_back(s);
     }
-
+    
     auto sun = std::make_shared<DirectionalLight>();
     sun->setDirection(-0.4f, -1.f, -0.3f).setIntensity(4.f);
     scene.add(sun);
