@@ -11,7 +11,6 @@
 // sky.hdr is optional — IBL gracefully disabled if absent.
 
 #include <vkgfx/vkgfx.h>
-#include <vulkan/vulkan.h>
 #include <iostream>
 #include <filesystem>
 #include <chrono>
@@ -88,7 +87,7 @@ int main(int argc, char** argv) {
     Window   window("vkgfx — deferred PBR + IBL", 1920, 1080);
     Renderer renderer(window, cfg);
     Context& ctx = renderer.context();
-    window.setFullscreen(true);
+    window.setFullscreen(false);
 
     // ── Camera ────────────────────────────────────────────────────────────────
     Camera cam;

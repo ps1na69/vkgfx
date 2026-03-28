@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cassert>
 #include <iostream>
+#include <memory>
 #include <queue>
 #include <stdexcept>
 #include <unordered_map>

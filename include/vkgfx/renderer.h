@@ -1,13 +1,11 @@
 #pragma once
 // include/vkgfx/renderer.h
-// Deferred renderer: Shadow → G-buffer → Lighting (IBL+sun) → Tonemap → Present.
-// Passes are orchestrated by a FrameGraph; render() is a thin frame loop.
 
 #include "config.h"
 #include "vk_raii.h"
 #include "scene.h"
 #include "ibl.h"
-#include "frame_graph.h"   // ← added
+#include "frame_graph.h"
 
 #include <vulkan/vulkan.h>
 #include <memory>
@@ -51,15 +49,18 @@ private:
     void validateAssets();
     void uploadMeshMaterials(Scene& scene);
 
-    // ── Per-pass recording (called from FrameGraph execute callbacks) ─────────
-    void recordShadowPass  (VkCommandBuffer cmd, Scene& scene);
-    void recordGBuffer     (VkCommandBuffer cmd, Scene& scene, uint32_t frameIdx);
-    void recordLighting    (VkCommandBuffer cmd, uint32_t frameIdx);
-    void recordTonemap     (VkCommandBuffer cmd, uint32_t frameIdx);
+    // Destroy and re-create G-buffer images, HDR target, and their framebuffers
+    // at the current m_swapchain->extent().  Re-writes affected descriptor sets.
+    // Called from render() when the swapchain is resized.
+    void rebuildOffscreenResources();
+
+    // ── Per-pass recording ────────────────────────────────────────────────────
+    void recordShadowPass(VkCommandBuffer cmd, Scene& scene);
+    void recordGBuffer   (VkCommandBuffer cmd, Scene& scene, uint32_t frameIdx);
+    void recordLighting  (VkCommandBuffer cmd, uint32_t frameIdx);
+    void recordTonemap   (VkCommandBuffer cmd, uint32_t frameIdx);
 
     // ── Frame graph ───────────────────────────────────────────────────────────
-    // Registers all passes and their resource I/O into m_frameGraph.
-    // Called each frame from render() between reset() and compile().
     void buildFrameGraph(Scene& scene, uint32_t frameIdx);
 
     VkShaderModule loadShaderModule(const std::string& name) const;
@@ -70,8 +71,9 @@ private:
     std::unique_ptr<Swapchain> m_swapchain;
     std::unique_ptr<IBLSystem> m_ibl;
 
-    // Frame graph — orchestrates pass ordering and barrier placement
-    FrameGraph m_frameGraph;   // ← added
+    // FrameGraph is a unique_ptr because it takes Context& in its ctor,
+    // and m_ctx isn't assigned until inside the constructor body.
+    std::unique_ptr<FrameGraph> m_frameGraph;
 
     // G-buffer attachments:
     //   [0]=albedo  [1]=normal  [2]=RMA  [3]=emissive  [4]=shadowCoord  [5]=depth
@@ -107,9 +109,9 @@ private:
     VkDescriptorSetLayout m_iblSetLayout       = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_tonemapSetLayout   = VK_NULL_HANDLE;
 
-    VkSampler m_gbufferSampler = VK_NULL_HANDLE;
-    VkSampler m_hdrSampler     = VK_NULL_HANDLE;
-    VkSampler m_fallbackSampler= VK_NULL_HANDLE;
+    VkSampler m_gbufferSampler  = VK_NULL_HANDLE;
+    VkSampler m_hdrSampler      = VK_NULL_HANDLE;
+    VkSampler m_fallbackSampler = VK_NULL_HANDLE;
 
     AllocatedImage m_fallbackWhite{};
     AllocatedImage m_fallbackNormal{};
@@ -140,6 +142,11 @@ private:
     std::vector<VkHandle<VkSemaphore>> m_renderFinishedSems;
 
     std::vector<AllocatedBuffer> m_materialUbos;
+
+    // Extent at which G-buffer / HDR images were allocated.
+    // Compared with m_swapchain->extent() each frame to detect resize.
+    VkExtent2D m_offscreenExtent{};
+
     uint32_t m_frameIdx    = 0;
     uint32_t m_swapIdx     = 0;
     bool     m_initialized = false;
