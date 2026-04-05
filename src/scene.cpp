@@ -79,6 +79,16 @@ void Scene::fillLightUBO(LightUBO& ubo, float iblIntensity, uint32_t gbufferDebu
     ubo.miscFlags.x = count;
     ubo.miscFlags.y = gbufferDebug;
     ubo.iblParams.x = iblIntensity;
+
+    // ── Point shadow — light index 0 is the dedicated shadow caster ──────────
+    // Enable when at least one point light exists, is enabled, and casts shadows.
+    ubo.pointShadowFlags.x = 0u;
+    for (auto& light : m_pointLights) {
+        if (light && light->enabled() && light->castsShadow()) {
+            ubo.pointShadowFlags.x = 1u;
+            break;
+        }
+    }
 }
 
 } // namespace vkgfx

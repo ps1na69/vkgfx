@@ -77,6 +77,7 @@ namespace vkgfx {
         initDescriptorPools();
         initDefaultTextures();  // must be before initPerFrameResources (uses fallback textures)
         initShadowPass();
+        initPointShadowPass();
         initGBuffer();
         initLightingPass();
         initTonemapPass();
@@ -139,7 +140,8 @@ namespace vkgfx {
         for (const char* name : { "gbuffer.vert.spv","gbuffer.frag.spv",
                                   "lighting.vert.spv","lighting.frag.spv",
                                   "tonemap.vert.spv","tonemap.frag.spv",
-                                  "shadow.vert.spv" }) {
+                                  "shadow.vert.spv",
+                                  "point_shadow.vert.spv","point_shadow.frag.spv" }) {
             std::string p = m_cfg.shaderDir + "/" + name;
             if (!fs::exists(p))
                 throw std::runtime_error("[vkgfx] Required shader missing: " + p);
@@ -468,21 +470,22 @@ namespace vkgfx {
         vkCreateFramebuffer(m_ctx->device(), &fi, nullptr, &m_lightingFb);
 
         // Descriptor set layouts ──────────────────────────────────────────────────
-        // set=0: 7 G-buffer bindings
-        //   0=albedo  1=normal  2=rma  3=emissive  4=shadowCoord  5=depth  6=shadowMap
-        // Bindings 0-5 use regular sampler2D; binding 6 uses sampler2DShadow for PCF
+        // set=0: 8 G-buffer bindings
+        //   0=albedo  1=normal  2=rma  3=emissive  4=shadowCoord  5=depth
+        //   6=shadowMap (sampler2DShadow, directional PCF)
+        //   7=pointShadowMap (samplerCubeShadow, omnidirectional PCF)
+        // All use COMBINED_IMAGE_SAMPLER in Vulkan; type is expressed in the shader.
         {
-            VkDescriptorSetLayoutBinding gb[7]{};
-            for (uint32_t i = 0; i < 7; ++i) {
+            VkDescriptorSetLayoutBinding gb[8]{};
+            for (uint32_t i = 0; i < 8; ++i) {
                 gb[i].binding = i;
                 gb[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 gb[i].descriptorCount = 1;
                 gb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             }
-            // binding 6 is sampler2DShadow — still COMBINED_IMAGE_SAMPLER in Vulkan
             VkDescriptorSetLayoutCreateInfo lci{};
             lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            lci.bindingCount = 7; lci.pBindings = gb;
+            lci.bindingCount = 8; lci.pBindings = gb;
             vkCreateDescriptorSetLayout(m_ctx->device(), &lci, nullptr, &m_lightingSetLayout);
         }
         // set=1: scene UBO + light UBO
@@ -860,6 +863,340 @@ namespace vkgfx {
         vkCmdEndRenderPass(cmd);
     }
 
+    // ── initPointShadowPass ───────────────────────────────────────────────────────
+    // Creates a 512² depth-only cubemap render pass for omnidirectional point-light
+    // shadow mapping.  The cube is rendered in 6 separate draw calls (one per face
+    // framebuffer), which is more portable than the geometry-shader multi-layer path.
+    // The result is sampled in the lighting pass as samplerCubeShadow + 8-tap PCF.
+
+    void Renderer::initPointShadowPass() {
+        VkFormat depthFmt = m_ctx->findDepthFormat();
+
+        // ── Cube depth image (6 layers, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) ──────
+        m_pointShadowCube = m_ctx->allocateImage(
+            { POINT_SHADOW_SIZE, POINT_SHADOW_SIZE },
+            depthFmt,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            /*mipLevels=*/1,
+            /*layers=*/6,
+            /*flags=*/VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
+
+        // Cube view — used by the lighting-pass samplerCubeShadow descriptor
+        m_pointCubeSamplerView = m_ctx->createImageView(
+            m_pointShadowCube.image, depthFmt,
+            VK_IMAGE_ASPECT_DEPTH_BIT,
+            /*mips=*/1, /*layers=*/6,
+            VK_IMAGE_VIEW_TYPE_CUBE);
+
+        // Six individual 2D face views — one framebuffer attachment per face
+        for (uint32_t face = 0; face < 6; ++face) {
+            VkImageViewCreateInfo vci{};
+            vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image    = m_pointShadowCube.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format   = depthFmt;
+            vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, face, 1 };
+            vkCreateImageView(m_ctx->device(), &vci, nullptr, &m_pointCubeFaceViews[face]);
+        }
+
+        // Pre-transition all 6 faces to SHADER_READ_ONLY_OPTIMAL.
+        // Same reasoning as the directional shadow map: when there are no point
+        // lights the pass is skipped entirely and the descriptor must still be valid.
+        {
+            VkCommandBuffer cmd = m_ctx->beginOneShot();
+            VkImageMemoryBarrier b{};
+            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image               = m_pointShadowCube.image;
+            b.srcAccessMask       = 0;
+            b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+            b.subresourceRange    = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 6 };
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &b);
+            m_ctx->endOneShot(cmd);
+        }
+
+        // Comparison sampler for samplerCubeShadow — linear filtering, edge clamp.
+        // CLAMP_TO_EDGE (not BORDER) avoids seam darkening at cube face boundaries.
+        VkSamplerCreateInfo sci{};
+        sci.sType         = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter     = VK_FILTER_LINEAR;
+        sci.minFilter     = VK_FILTER_LINEAR;
+        sci.addressModeU  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.compareEnable = VK_TRUE;
+        sci.compareOp     = VK_COMPARE_OP_LESS_OR_EQUAL;
+        sci.mipmapMode    = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sci.maxLod        = 1.f;
+        vkCreateSampler(m_ctx->device(), &sci, nullptr, &m_pointShadowSampler);
+
+        // Depth-only render pass — identical structure to the directional shadow pass.
+        // initialLayout = SHADER_READ_ONLY_OPTIMAL because we pre-transition above;
+        // the render pass transitions back to DEPTH_STENCIL on load (clear) and then
+        // to SHADER_READ_ONLY_OPTIMAL on store.
+        VkAttachmentDescription depthAtt{};
+        depthAtt.format         = depthFmt;
+        depthAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
+        depthAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAtt.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAtt.initialLayout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depthAtt.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference depRef{ 0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+        VkSubpassDescription  sub{};
+        sub.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sub.colorAttachmentCount    = 0;
+        sub.pDepthStencilAttachment = &depRef;
+
+        VkSubpassDependency deps[2]{};
+        deps[0].srcSubpass      = VK_SUBPASS_EXTERNAL; deps[0].dstSubpass = 0;
+        deps[0].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[0].dstStageMask    = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        deps[0].srcAccessMask   = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstAccessMask   = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        deps[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+        deps[1].srcSubpass      = 0; deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask    = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        deps[1].dstStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].srcAccessMask   = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        deps[1].dstAccessMask   = VK_ACCESS_SHADER_READ_BIT;
+        deps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+        VkRenderPassCreateInfo rpi{};
+        rpi.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rpi.attachmentCount = 1; rpi.pAttachments  = &depthAtt;
+        rpi.subpassCount    = 1; rpi.pSubpasses     = &sub;
+        rpi.dependencyCount = 2; rpi.pDependencies  = deps;
+        vkCreateRenderPass(m_ctx->device(), &rpi, nullptr, &m_pointShadowPass);
+
+        // One framebuffer per cube face — each wraps the matching 2D face view
+        for (uint32_t face = 0; face < 6; ++face) {
+            VkFramebufferCreateInfo fi{};
+            fi.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fi.renderPass      = m_pointShadowPass;
+            fi.attachmentCount = 1;
+            fi.pAttachments    = &m_pointCubeFaceViews[face];
+            fi.width           = POINT_SHADOW_SIZE;
+            fi.height          = POINT_SHADOW_SIZE;
+            fi.layers          = 1;
+            vkCreateFramebuffer(m_ctx->device(), &fi, nullptr, &m_pointShadowFbs[face]);
+        }
+
+        // Descriptor set layout: set=0, binding=0 — per-light UBO (vec4 lightPosAndFar)
+        // Bound in both vertex and fragment stages so the fragment shader can compute
+        // normalised linear depth without a second push constant.
+        VkDescriptorSetLayoutBinding uboB{};
+        uboB.binding         = 0;
+        uboB.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboB.descriptorCount = 1;
+        uboB.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutCreateInfo lci{};
+        lci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        lci.bindingCount = 1;
+        lci.pBindings    = &uboB;
+        vkCreateDescriptorSetLayout(m_ctx->device(), &lci, nullptr, &m_pointShadowDsLayout);
+
+        // Pipeline layout: set=0 (lightPosAndFar UBO) + 128-byte vertex push constant
+        VkPushConstantRange pc{};
+        pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pc.offset     = 0;
+        pc.size       = sizeof(PointShadowPush); // 128 bytes: model(64) + faceVP(64)
+
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &m_pointShadowDsLayout;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pc;
+        vkCreatePipelineLayout(m_ctx->device(), &plci, nullptr, &m_pointShadowLayout);
+
+        // Shaders
+        VkShaderModule vert = loadSPV(m_ctx->device(),
+                                       m_cfg.shaderDir + "/point_shadow.vert.spv");
+        VkShaderModule frag = loadSPV(m_ctx->device(),
+                                       m_cfg.shaderDir + "/point_shadow.frag.spv");
+
+        auto binding = Vertex::bindingDescription();
+        auto attribs = Vertex::attributeDescriptions();
+
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vi.vertexBindingDescriptionCount   = 1;
+        vi.pVertexBindingDescriptions      = &binding;
+        vi.vertexAttributeDescriptionCount = static_cast<uint32_t>(attribs.size());
+        vi.pVertexAttributeDescriptions    = attribs.data();
+
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineViewportStateCreateInfo vps{};
+        vps.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vps.viewportCount = 1; vps.scissorCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo rs{};
+        rs.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rs.polygonMode             = VK_POLYGON_MODE_FILL;
+        rs.cullMode                = VK_CULL_MODE_FRONT_BIT; // front-face cull reduces peter-panning
+        rs.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.lineWidth               = 1.0f;
+        rs.depthBiasEnable         = VK_TRUE;
+        rs.depthBiasConstantFactor = 1.25f;
+        rs.depthBiasSlopeFactor    = 1.75f;
+
+        VkPipelineMultisampleStateCreateInfo msci{};
+        msci.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        msci.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo dss{};
+        dss.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        dss.depthTestEnable  = VK_TRUE;
+        dss.depthWriteEnable = VK_TRUE;
+        dss.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+        VkPipelineColorBlendStateCreateInfo cb{};
+        cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        // No colour attachments — depth only, attachmentCount stays 0
+
+        VkDynamicState                   dynS[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+        VkPipelineDynamicStateCreateInfo dyn{};
+        dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynS;
+
+        VkPipelineShaderStageCreateInfo stg[2]{};
+        stg[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stg[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+        stg[0].module = vert; stg[0].pName = "main";
+        stg[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stg[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stg[1].module = frag; stg[1].pName = "main";
+
+        VkGraphicsPipelineCreateInfo gci{};
+        gci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        gci.stageCount          = 2;  gci.pStages            = stg;
+        gci.pVertexInputState   = &vi; gci.pInputAssemblyState = &ia;
+        gci.pViewportState      = &vps; gci.pRasterizationState = &rs;
+        gci.pMultisampleState   = &msci; gci.pDepthStencilState  = &dss;
+        gci.pColorBlendState    = &cb; gci.pDynamicState        = &dyn;
+        gci.layout              = m_pointShadowLayout;
+        gci.renderPass          = m_pointShadowPass;
+        vkCreateGraphicsPipelines(m_ctx->device(), VK_NULL_HANDLE,
+                                   1, &gci, nullptr, &m_pointShadowPipeline);
+
+        vkDestroyShaderModule(m_ctx->device(), vert, nullptr);
+        vkDestroyShaderModule(m_ctx->device(), frag, nullptr);
+    }
+
+    // ── recordPointShadowPass ─────────────────────────────────────────────────────
+    // Renders the scene's depth into all 6 faces of the point-shadow cubemap.
+    // Only light index 0 (first enabled PointLight) acts as the shadow caster.
+    // Each face is a separate render pass begin/end — no geometry shader required.
+
+    void Renderer::recordPointShadowPass(VkCommandBuffer cmd, Scene& scene, uint32_t frameIdx) {
+        // Find the first enabled PointLight that has shadow casting enabled.
+        // This is the shadow caster for the single cube map slot.
+        const PointLight* caster = nullptr;
+        for (auto& pl : scene.pointLights()) {
+            if (pl && pl->enabled() && pl->castsShadow()) { caster = pl.get(); break; }
+        }
+        if (!caster) return; // nothing to do
+
+        auto& f = m_frames[frameIdx];
+
+        // Upload lightPos + farPlane (= light radius) to the per-frame UBO.
+        // The fragment shader uses this to compute normalised linear depth:
+        //   gl_FragDepth = length(fragPos - lightPos) / farPlane
+        struct { glm::vec4 lightPosAndFar; } ld;
+        ld.lightPosAndFar = glm::vec4(caster->position(), caster->radius());
+        {
+            void* mapped = nullptr;
+            vmaMapMemory(m_ctx->vma(),
+                static_cast<VmaAllocation>(f.pointShadowLightUbo.allocation), &mapped);
+            std::memcpy(mapped, &ld, sizeof(ld));
+            vmaUnmapMemory(m_ctx->vma(),
+                static_cast<VmaAllocation>(f.pointShadowLightUbo.allocation));
+        }
+
+        // Compute six face view-projection matrices.
+        // 90° FOV + aspect=1.0 ensures each face covers exactly 1/6 of the sphere.
+        // Vulkan NDC has Y pointing down, so proj[1][1] is negated (same as the
+        // existing directional shadow pass convention in this engine).
+        const glm::vec3 lpos     = caster->position();
+        const float     farPlane = caster->radius();
+        glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f, 0.01f, farPlane);
+        proj[1][1] *= -1.f;
+
+        // Face order matches VkCubeMapFace: +X -X +Y -Y +Z -Z
+        struct FaceDir { glm::vec3 dir, up; };
+        const FaceDir faces[6] = {
+            {{ 1.f,  0.f,  0.f}, {0.f, -1.f,  0.f}}, // +X
+            {{-1.f,  0.f,  0.f}, {0.f, -1.f,  0.f}}, // -X
+            {{ 0.f,  1.f,  0.f}, {0.f,  0.f,  1.f}}, // +Y
+            {{ 0.f, -1.f,  0.f}, {0.f,  0.f, -1.f}}, // -Y
+            {{ 0.f,  0.f,  1.f}, {0.f, -1.f,  0.f}}, // +Z
+            {{ 0.f,  0.f, -1.f}, {0.f, -1.f,  0.f}}, // -Z
+        };
+        glm::mat4 faceVP[6];
+        for (int i = 0; i < 6; ++i)
+            faceVP[i] = proj * glm::lookAt(lpos, lpos + faces[i].dir, faces[i].up);
+
+        // Common viewport / scissor — fixed to the shadow map resolution
+        const VkExtent2D ext{ POINT_SHADOW_SIZE, POINT_SHADOW_SIZE };
+        VkViewport vp{ 0.f, 0.f,
+                       static_cast<float>(POINT_SHADOW_SIZE),
+                       static_cast<float>(POINT_SHADOW_SIZE),
+                       0.f, 1.f };
+        VkRect2D sc{ {0, 0}, ext };
+
+        VkClearValue depthClear{};
+        depthClear.depthStencil = { 1.0f, 0 };
+
+        for (uint32_t face = 0; face < 6; ++face) {
+            VkRenderPassBeginInfo rbi{};
+            rbi.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rbi.renderPass      = m_pointShadowPass;
+            rbi.framebuffer     = m_pointShadowFbs[face];
+            rbi.renderArea      = { {0, 0}, ext };
+            rbi.clearValueCount = 1;
+            rbi.pClearValues    = &depthClear;
+            vkCmdBeginRenderPass(cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              m_pointShadowPipeline);
+            vkCmdSetViewport(cmd, 0, 1, &vp);
+            vkCmdSetScissor (cmd, 0, 1, &sc);
+
+            // Bind the light UBO (set=0) — same data for all 6 faces
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_pointShadowLayout, 0, 1, &f.pointShadowDs, 0, nullptr);
+
+            // Draw each mesh with its face-specific view-projection
+            for (Mesh* mesh : scene.visibleMeshes()) {
+                PointShadowPush push{};
+                push.model  = mesh->modelMatrix();
+                push.faceVP = faceVP[face];
+                vkCmdPushConstants(cmd, m_pointShadowLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PointShadowPush), &push);
+
+                VkDeviceSize offsets[] = { 0 };
+                vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertexBuffer(), offsets);
+                vkCmdBindIndexBuffer  (cmd, mesh->indexBuffer(), 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed      (cmd, mesh->indexCount(), 1, 0, 0, 0);
+            }
+
+            vkCmdEndRenderPass(cmd);
+        }
+    }
+
     // ── initDefaultTextures ───────────────────────────────────────────────────────
     // Creates 1x1 solid-color images used as fallback descriptors.
     // Every binding in defaultMaterialSet must be written with valid image data.
@@ -1169,7 +1506,28 @@ namespace vkgfx {
                 vkUpdateDescriptorSets(m_ctx->device(), 3, iblWrites, 0, nullptr);
             }
 
-            // Write gbufferSceneSet: scene UBO
+            // ── Point shadow per-frame resources ──────────────────────────────
+            // Small UBO holds vec4(lightPos, farPlane) — written by recordPointShadowPass().
+            f.pointShadowLightUbo = m_ctx->allocateBuffer(
+                sizeof(glm::vec4), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+            {
+                VkDescriptorSetAllocateInfo psai{};
+                psai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                psai.descriptorPool     = m_descriptorPool.get();
+                psai.descriptorSetCount = 1;
+                psai.pSetLayouts        = &m_pointShadowDsLayout;
+                vkAllocateDescriptorSets(m_ctx->device(), &psai, &f.pointShadowDs);
+
+                VkDescriptorBufferInfo psBI{ f.pointShadowLightUbo.buffer, 0, sizeof(glm::vec4) };
+                VkWriteDescriptorSet   psW{};
+                psW.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                psW.dstSet          = f.pointShadowDs;
+                psW.dstBinding      = 0;
+                psW.descriptorCount = 1;
+                psW.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                psW.pBufferInfo     = &psBI;
+                vkUpdateDescriptorSets(m_ctx->device(), 1, &psW, 0, nullptr);
+            }
             {
                 VkDescriptorBufferInfo bi{ f.sceneUbo.buffer, 0, sizeof(SceneUBO) };
                 VkWriteDescriptorSet w{};
@@ -1199,7 +1557,7 @@ namespace vkgfx {
                 w.pImageInfo = &imgInfo;
                 vkUpdateDescriptorSets(m_ctx->device(), 1, &w, 0, nullptr);
             }
-            // Binding 6: shadow map with comparison sampler
+            // Binding 6: directional shadow map (comparison sampler)
             {
                 VkDescriptorImageInfo shadowInfo{};
                 shadowInfo.sampler = m_shadowSampler;
@@ -1212,6 +1570,21 @@ namespace vkgfx {
                 w.descriptorCount = 1;
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &shadowInfo;
+                vkUpdateDescriptorSets(m_ctx->device(), 1, &w, 0, nullptr);
+            }
+            // Binding 7: point light shadow cubemap (comparison sampler)
+            {
+                VkDescriptorImageInfo ptInfo{};
+                ptInfo.sampler     = m_pointShadowSampler;
+                ptInfo.imageView   = m_pointCubeSamplerView;
+                ptInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                VkWriteDescriptorSet w{};
+                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w.dstSet          = f.lightingGbufferSet;
+                w.dstBinding      = 7;
+                w.descriptorCount = 1;
+                w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w.pImageInfo      = &ptInfo;
                 vkUpdateDescriptorSets(m_ctx->device(), 1, &w, 0, nullptr);
             }
 
@@ -1328,6 +1701,7 @@ namespace vkgfx {
         initDescriptorPools();
         initDefaultTextures();  // must be before initPerFrameResources (uses fallback textures)
         initShadowPass();
+        initPointShadowPass();
         initGBuffer();
         initLightingPass();
         initTonemapPass();
@@ -1421,6 +1795,7 @@ namespace vkgfx {
             m_ctx->destroyBuffer(f.sceneUbo);
             m_ctx->destroyBuffer(f.lightUbo);
             m_ctx->destroyBuffer(f.defaultParamsUbo);
+            m_ctx->destroyBuffer(f.pointShadowLightUbo);
             // Semaphores/fences are RAII VkHandles — destroyed automatically
         }
 
@@ -1456,9 +1831,28 @@ namespace vkgfx {
         td(m_shadowPass, vkDestroyRenderPass);
         td(m_shadowFb, vkDestroyFramebuffer);
 
+        // ── Point shadow cubemap cleanup ──────────────────────────────────────
+        td(m_pointShadowPipeline, vkDestroyPipeline);
+        td(m_pointShadowLayout, vkDestroyPipelineLayout);
+        td(m_pointShadowDsLayout, vkDestroyDescriptorSetLayout);
+        td(m_pointShadowPass, vkDestroyRenderPass);
+        td(m_pointShadowSampler, vkDestroySampler);
+        for (uint32_t fi = 0; fi < 6; ++fi) {
+            td(m_pointShadowFbs[fi], vkDestroyFramebuffer);
+            if (m_pointCubeFaceViews[fi] != VK_NULL_HANDLE) {
+                vkDestroyImageView(dev, m_pointCubeFaceViews[fi], nullptr);
+                m_pointCubeFaceViews[fi] = VK_NULL_HANDLE;
+            }
+        }
+        if (m_pointCubeSamplerView != VK_NULL_HANDLE) {
+            vkDestroyImageView(dev, m_pointCubeSamplerView, nullptr);
+            m_pointCubeSamplerView = VK_NULL_HANDLE;
+        }
+
         for (auto& img : m_gbuffer) m_ctx->destroyImage(img);
         m_ctx->destroyImage(m_hdrTarget);
         m_ctx->destroyImage(m_shadowMap);
+        m_ctx->destroyImage(m_pointShadowCube);
         m_ctx->destroyImage(m_fallbackWhite);
         m_ctx->destroyImage(m_fallbackNormal);
         m_ctx->destroyImage(m_fallbackRMA);
@@ -1565,7 +1959,8 @@ namespace vkgfx {
         // ── Re-write per-frame descriptor sets that reference the new views ───────
         // lightingGbufferSet bindings 0-5 reference G-buffer views.
         // tonemapSet binding 0 references the HDR target view.
-        // Shadow map (binding 6) and UBO sets are extent-independent — unchanged.
+        // Shadow map (binding 6), point shadow cubemap (binding 7), and UBO sets
+        // are extent-independent — unchanged on resize.
         for (auto& f : m_frames) {
             for (uint32_t g = 0; g < 6; ++g) {
                 VkDescriptorImageInfo imgInfo{};

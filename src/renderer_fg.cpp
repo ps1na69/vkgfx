@@ -14,6 +14,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <array>
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 
@@ -165,6 +166,13 @@ void Renderer::buildFrameGraph(Scene& scene, uint32_t frameIdx) {
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_IMAGE_ASPECT_DEPTH_BIT);
 
+    const RGHandle hPointShadow = m_frameGraph->importImage(
+        "point_shadow_cube",
+        m_pointShadowCube.image, m_pointCubeSamplerView,
+        m_ctx->findDepthFormat(),
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_DEPTH_BIT);
+
     const RGHandle hAlbedo = m_frameGraph->importImage(
         "gbuf_albedo",
         m_gbuffer[0].image, m_gbuffer[0].view,
@@ -225,6 +233,21 @@ void Renderer::buildFrameGraph(Scene& scene, uint32_t frameIdx) {
             });
     }
 
+    // Point-light shadow cubemap pass — runs when at least one shadow-casting
+    // PointLight exists. Only the first such light fills the cube map slot.
+    const bool hasPointShadow = std::any_of(
+        scene.pointLights().begin(), scene.pointLights().end(),
+        [](const auto& pl){ return pl && pl->enabled() && pl->castsShadow(); });
+    if (hasPointShadow) {
+        m_frameGraph->addPass("point_shadow",
+            [&](PassBuilder& b) {
+                b.writeShadowMap(hPointShadow);
+            },
+            [this, &scene, frameIdx](VkCommandBuffer cmd, const FrameGraphResources&) {
+                recordPointShadowPass(cmd, scene, frameIdx);
+            });
+    }
+
     m_frameGraph->addPass("gbuffer",
         [&](PassBuilder& b) {
             b.writeColorAttachment(hAlbedo);
@@ -247,6 +270,7 @@ void Renderer::buildFrameGraph(Scene& scene, uint32_t frameIdx) {
             b.read(hShadowCoord);
             b.read(hDepth);
             b.read(hShadow);
+            b.read(hPointShadow);
             b.writeColorAttachment(hHDR);
         },
         [this, frameIdx](VkCommandBuffer cmd, const FrameGraphResources&) {

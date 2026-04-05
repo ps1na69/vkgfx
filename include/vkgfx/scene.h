@@ -41,19 +41,24 @@ public:
     PointLight& setIntensity(float v);
     PointLight& setRadius(float r);
     PointLight& setEnabled(bool v);
+    /// Controls whether this light contributes to the point-shadow cubemap.
+    /// Only the first light with castsShadow()==true is rendered into the cube map.
+    PointLight& setCastsShadow(bool v) { m_castsShadow = v; return *this; }
 
-    [[nodiscard]] glm::vec3 position()  const { return m_position; }
-    [[nodiscard]] glm::vec3 color()     const { return m_color; }
-    [[nodiscard]] float     intensity() const { return m_intensity; }
-    [[nodiscard]] float     radius()    const { return m_radius; }
-    [[nodiscard]] bool      enabled()   const { return m_enabled; }
+    [[nodiscard]] glm::vec3 position()    const { return m_position; }
+    [[nodiscard]] glm::vec3 color()       const { return m_color; }
+    [[nodiscard]] float     intensity()   const { return m_intensity; }
+    [[nodiscard]] float     radius()      const { return m_radius; }
+    [[nodiscard]] bool      enabled()     const { return m_enabled; }
+    [[nodiscard]] bool      castsShadow() const { return m_castsShadow; }
 
 private:
-    glm::vec3 m_position  = {0.f, 0.f, 0.f};
-    glm::vec3 m_color     = {1.f, 1.f, 1.f};
-    float     m_intensity = 1.0f;
-    float     m_radius    = 10.0f;
-    bool      m_enabled   = true;
+    glm::vec3 m_position    = {0.f, 0.f, 0.f};
+    glm::vec3 m_color       = {1.f, 1.f, 1.f};
+    float     m_intensity   = 1.0f;
+    float     m_radius      = 10.0f;
+    bool      m_enabled     = true;
+    bool      m_castsShadow = true;  // shadow-casting on by default
 };
 
 // ── Scene ─────────────────────────────────────────────────────────────────────

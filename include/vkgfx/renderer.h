@@ -46,6 +46,7 @@ private:
     void initIBL();
     void initDefaultTextures();
     void initShadowPass();
+    void initPointShadowPass();
     void validateAssets();
     void uploadMeshMaterials(Scene& scene);
 
@@ -55,8 +56,9 @@ private:
     void rebuildOffscreenResources();
 
     // ── Per-pass recording ────────────────────────────────────────────────────
-    void recordShadowPass(VkCommandBuffer cmd, Scene& scene);
-    void recordGBuffer   (VkCommandBuffer cmd, Scene& scene, uint32_t frameIdx);
+    void recordShadowPass     (VkCommandBuffer cmd, Scene& scene);
+    void recordPointShadowPass(VkCommandBuffer cmd, Scene& scene, uint32_t frameIdx);
+    void recordGBuffer        (VkCommandBuffer cmd, Scene& scene, uint32_t frameIdx);
     void recordLighting  (VkCommandBuffer cmd, uint32_t frameIdx);
     void recordTonemap   (VkCommandBuffer cmd, uint32_t frameIdx);
 
@@ -95,6 +97,20 @@ private:
     VkSampler           m_shadowSampler    = VK_NULL_HANDLE;
     static constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
+    // ── Point-light shadow cubemap ────────────────────────────────────────────
+    // One 512² cubemap covers light index 0 (first enabled PointLight).
+    // Extend to a VkImageViewType::eCubeArray + loop for multiple casters.
+    AllocatedImage    m_pointShadowCube{};
+    VkImageView       m_pointCubeFaceViews[6]  = {};       // 2D per-layer, for FBs
+    VkImageView       m_pointCubeSamplerView   = VK_NULL_HANDLE; // CUBE, for shader
+    VkRenderPass      m_pointShadowPass        = VK_NULL_HANDLE;
+    VkFramebuffer     m_pointShadowFbs[6]      = {};
+    VkSampler         m_pointShadowSampler     = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_pointShadowDsLayout = VK_NULL_HANDLE;
+    VkPipelineLayout  m_pointShadowLayout      = VK_NULL_HANDLE;
+    VkPipeline        m_pointShadowPipeline    = VK_NULL_HANDLE;
+    static constexpr uint32_t POINT_SHADOW_SIZE = 512;
+
     VkPipelineLayout m_gbufferLayout    = VK_NULL_HANDLE;
     VkPipeline       m_gbufferPipeline  = VK_NULL_HANDLE;
     VkPipelineLayout m_lightingLayout   = VK_NULL_HANDLE;
@@ -130,10 +146,12 @@ private:
         VkDescriptorSet lightingSceneSet   = VK_NULL_HANDLE;
         VkDescriptorSet iblSet             = VK_NULL_HANDLE;
         VkDescriptorSet tonemapSet         = VK_NULL_HANDLE;
+        VkDescriptorSet pointShadowDs      = VK_NULL_HANDLE; // set=0 for point_shadow pass
 
         AllocatedBuffer sceneUbo{};
         AllocatedBuffer lightUbo{};
         AllocatedBuffer defaultParamsUbo{};
+        AllocatedBuffer pointShadowLightUbo{};  // vec4: xyz=lightPos, w=farPlane
     };
 
     std::array<PerFrame, MAX_FRAMES_IN_FLIGHT> m_frames{};

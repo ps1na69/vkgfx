@@ -181,8 +181,9 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 4; ++i) {
         auto l = std::make_shared<PointLight>();
         l->setColor(ptColors[i].r, ptColors[i].g, ptColors[i].b)
-         .setIntensity(60.f)
-         .setRadius(8.f);
+            .setIntensity(60.f)
+            .setRadius(8.f)
+            .setCastsShadow(true);
         scene.add(l);
         ptLights.push_back(l);
     }

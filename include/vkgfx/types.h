@@ -49,6 +49,14 @@ struct MeshPush {
 };
 static_assert(sizeof(MeshPush) == 128);
 
+// Push constants for the point-light shadow pass (128 bytes, vertex stage).
+// Same size as MeshPush — model in the first slot, per-face view-proj in the second.
+struct PointShadowPush {
+    glm::mat4 model;    // object → world
+    glm::mat4 faceVP;   // world → clip for the current cube face
+};
+static_assert(sizeof(PointShadowPush) == 128);
+
 // ── Scene UBO ─────────────────────────────────────────────────────────────────
 // set=0 binding=0 in G-buffer pass (vertex stage)
 // set=1 binding=0 in lighting pass (fragment stage)
@@ -101,7 +109,11 @@ struct alignas(16) LightUBO {
     glm::uvec4 miscFlags;           // x=pointCount, y=gbufferDebug, zw=0
 
     // IBL — offset 448
-    glm::vec4  iblParams;           // x=iblIntensity, yzw=0
+    glm::vec4  iblParams;           // x=iblIntensity, yzw=0        — offset 448
+
+    // Point shadow — offset 464
+    // x = enabled (0=off, 1=on for light index 0)
+    glm::uvec4 pointShadowFlags;
 };
 
 // ── PBR material params ────────────────────────────────────────────────────────

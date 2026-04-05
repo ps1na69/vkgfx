@@ -78,10 +78,12 @@ int main() {
     // Two orbiting point lights
     auto ptA = std::make_shared<PointLight>();
     ptA->setColor(0.2f, 0.5f, 1.f).setIntensity(80.f).setRadius(8.f);
+    ptA->setCastsShadow(true);
     scene.add(ptA);
 
     auto ptB = std::make_shared<PointLight>();
     ptB->setColor(1.f, 0.4f, 0.1f).setIntensity(80.f).setRadius(8.f);
+    ptB->setCastsShadow(true);
     scene.add(ptB);
 
     // ── Collision world ───────────────────────────────────────────────────────

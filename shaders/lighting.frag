@@ -2,7 +2,9 @@
 // shaders/lighting.frag  —  Deferred PBR lighting pass.
 //
 // G-buffer bindings (set=0):
-//   0=albedo  1=normal  2=RMA  3=emissive  4=shadowCoord  5=depth  6=shadowMap
+//   0=albedo  1=normal  2=RMA  3=emissive  4=shadowCoord  5=depth
+//   6=shadowMap (sampler2DShadow, directional PCF)
+//   7=pointShadowMap (samplerCubeShadow, omnidirectional PCF)
 //
 // Scene UBO (set=1 binding=0) and Light UBO (set=1 binding=1) MUST match
 // types.h LightUBO and SceneUBO exactly (std140).
@@ -19,7 +21,8 @@ layout(set = 0, binding = 2) uniform sampler2D   gRMA;
 layout(set = 0, binding = 3) uniform sampler2D   gEmissive;
 layout(set = 0, binding = 4) uniform sampler2D   gShadowCoord;
 layout(set = 0, binding = 5) uniform sampler2D   gDepth;
-layout(set = 0, binding = 6) uniform sampler2DShadow shadowMap;
+layout(set = 0, binding = 6) uniform sampler2DShadow   shadowMap;
+layout(set = 0, binding = 7) uniform samplerCubeShadow pointShadowMap;
 
 // ── Scene UBO (set=1 binding=0) ───────────────────────────────────────────────
 layout(set = 1, binding = 0) uniform SceneUBO {
@@ -56,6 +59,7 @@ layout(set = 1, binding = 1) uniform LightUBO {
     PointLightGPU  points[8];
     uvec4          miscFlags;         // x=pointCount, y=gbufferDebug
     vec4           iblParams;         // x=iblIntensity
+    uvec4          pointShadowFlags;  // x=pointShadowEnabled (0=off, 1=on)
 } lights;
 
 // ── IBL (set=2) ───────────────────────────────────────────────────────────────
@@ -139,6 +143,39 @@ float pointAtten(vec3 frag, vec3 lpos, float radius) {
     return (w * w) / max(d2, 0.0001);
 }
 
+// PCF for samplerCubeShadow.
+// dir      = worldPos - lightPos (unnormalised)
+// farPlane = light.params.x (radius used as far plane during shadow render)
+// Returns shadow factor in [0,1].  1.0 = fully lit, 0.0 = fully shadowed.
+//
+// samplerCubeShadow hardware comparison: texture(sampler, vec4(dir,cmp)) returns
+// the percentage of taps where stored_depth >= cmp (i.e., 1 = not in shadow).
+// We jitter dir with small axis-aligned offsets (disk-like pattern) for soft edges.
+float pointShadowPCF(vec3 dir, float farPlane) {
+    float curDepth = length(dir) / farPlane;
+    float bias     = 0.005;          // constant bias — linear depth avoids slope issues
+    float offset   = 0.04;           // world-space jitter radius for PCF kernel
+
+    // 8-tap Poisson-ish kernel on the dominant-axis perpendicular plane.
+    // Using fixed world-space offsets keeps the kernel symmetric regardless of
+    // which cube face is sampled.
+    vec3 sampleDirs[8] = vec3[8](
+        dir + vec3( offset,  offset,  0.0),
+        dir + vec3(-offset,  offset,  0.0),
+        dir + vec3( offset, -offset,  0.0),
+        dir + vec3(-offset, -offset,  0.0),
+        dir + vec3( offset,  0.0,  offset),
+        dir + vec3(-offset,  0.0,  offset),
+        dir + vec3( 0.0,  offset, -offset),
+        dir + vec3( 0.0, -offset, -offset)
+    );
+
+    float shadow = 0.0;
+    for (int i = 0; i < 8; ++i)
+        shadow += texture(pointShadowMap, vec4(sampleDirs[i], curDepth - bias));
+    return shadow / 8.0;
+}
+
 void main() {
     // ── Read G-buffer ─────────────────────────────────────────────────────────
     vec3  albedo    = texture(gAlbedo,      inUV).rgb;
@@ -154,11 +191,12 @@ void main() {
     vec3  N         = normalize(Nenc * 2.0 - 1.0);
 
     // ── Unpack misc flags ─────────────────────────────────────────────────────
-    uint  pointCount   = lights.miscFlags.x;
-    uint  debugView    = lights.miscFlags.y;
-    float iblIntensity = lights.iblParams.x;
-    uint  sunEnabled   = lights.sunFlags.x;
-    uint  shadowOn     = lights.sunFlags.y;
+    uint  pointCount       = lights.miscFlags.x;
+    uint  debugView        = lights.miscFlags.y;
+    float iblIntensity     = lights.iblParams.x;
+    uint  sunEnabled       = lights.sunFlags.x;
+    uint  shadowOn         = lights.sunFlags.y;
+    uint  pointShadowOn    = lights.pointShadowFlags.x;
 
     // ── Debug views ───────────────────────────────────────────────────────────
     if (debugView == 1u) { outColor = vec4(albedo,          1.0); return; }
@@ -214,10 +252,20 @@ void main() {
         float radius  = lights.points[i].params.x;
         float atten   = pointAtten(worldPos, lpos, radius);
         if (atten <= 0.0) continue;
+
+        // Omnidirectional PCF shadow — only supported for light index 0 in this
+        // implementation (one cube shadow map). Extend to an array for more casters.
+        float ptShadow = 1.0;
+        if (pointShadowOn != 0u && i == 0u) {
+            vec3 fragToLight = worldPos - lpos;
+            ptShadow = pointShadowPCF(fragToLight, radius);
+        }
+        if (ptShadow <= 0.0) continue;
+
         vec3  L        = normalize(lpos - worldPos);
         vec3  radiance = lights.points[i].color.rgb
                        * lights.points[i].color.w * atten;
-        Lo += evalBRDF(albedo, roughness, metallic, N, V, L, F0, radiance);
+        Lo += evalBRDF(albedo, roughness, metallic, N, V, L, F0, radiance) * ptShadow;
     }
 
     // ── IBL ambient ───────────────────────────────────────────────────────────
