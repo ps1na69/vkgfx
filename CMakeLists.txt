@@ -113,6 +113,41 @@ set(FASTGLTF_ENABLE_TESTS     OFF CACHE BOOL "" FORCE)
 set(FASTGLTF_ENABLE_EXAMPLES  OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(fastgltf)
 
+# ── Dear ImGui (GPU profiler overlay) ─────────────────────────────────────────
+# ON by default so examples show the profiler out of the box.
+# Set -DVKGFX_ENABLE_PROFILING=OFF to build without ImGui for size-sensitive targets.
+option(VKGFX_ENABLE_PROFILING "Enable GPU timestamp profiler + ImGui overlay" ON)
+
+if(VKGFX_ENABLE_PROFILING)
+    message(STATUS "vkgfx: fetching Dear ImGui (profiling overlay)")
+    FetchContent_Declare(imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG        v1.91.9
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(imgui)
+
+    if(NOT TARGET imgui_vkgfx)
+        add_library(imgui_vkgfx STATIC
+            ${imgui_SOURCE_DIR}/imgui.cpp
+            ${imgui_SOURCE_DIR}/imgui_draw.cpp
+            ${imgui_SOURCE_DIR}/imgui_tables.cpp
+            ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+            ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+            ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp)
+        target_include_directories(imgui_vkgfx
+            PUBLIC
+                ${imgui_SOURCE_DIR}
+                ${imgui_SOURCE_DIR}/backends)
+        target_link_libraries(imgui_vkgfx
+            PUBLIC Vulkan::Vulkan ${VKGFX_GLFW_TARGET})
+        # Do NOT define IMGUI_IMPL_VULKAN_NO_PROTOTYPES — vkgfx links against
+        # vulkan-1 directly so all Vulkan symbols are already resolved.
+        # That flag would require a manual ImGui_ImplVulkan_LoadFunctions() call.
+        target_compile_options(imgui_vkgfx
+            PRIVATE $<IF:$<CXX_COMPILER_ID:MSVC>,/W0,-w>)
+    endif()
+endif()
+
 # ── Shader compilation ─────────────────────────────────────────────────────────
 if(Vulkan_GLSLC_EXECUTABLE)
     set(GLSLC "${Vulkan_GLSLC_EXECUTABLE}")
@@ -203,6 +238,18 @@ target_compile_definitions(vkgfx
         GLM_ENABLE_EXPERIMENTAL
     PRIVATE
         $<$<AND:$<CONFIG:Debug>,$<BOOL:${VKGFX_ENABLE_VALIDATION}>>:VKGFX_ENABLE_VALIDATION>)
+
+# Profiling: define the macro and link ImGui when the option is enabled.
+# imgui_vkgfx is scoped to BUILD_INTERFACE so it doesn't leak into the
+# install export set (downstream targets use their own ImGui).
+if(VKGFX_ENABLE_PROFILING)
+    target_compile_definitions(vkgfx PUBLIC VKGFX_ENABLE_PROFILING)
+    target_link_libraries(vkgfx PRIVATE $<BUILD_INTERFACE:imgui_vkgfx>)
+    target_include_directories(vkgfx
+        PUBLIC
+            $<BUILD_INTERFACE:${imgui_SOURCE_DIR}>
+            $<BUILD_INTERFACE:${imgui_SOURCE_DIR}/backends>)
+endif()
 
 if(MSVC)
     target_compile_options(vkgfx PRIVATE /W3 /wd4201 /wd4100 /wd4996 /wd4244 /wd4267)

@@ -22,6 +22,13 @@ Swapchain::~Swapchain() {
 }
 
 void Swapchain::recreate() {
+    // A window minimize or fullscreen transition temporarily reports {0,0}.
+    // Attempting vkCreateSwapchainKHR with a zero extent is a validation error.
+    // glfwWaitEvents() blocks until the next GLFW event arrives (e.g. restore),
+    // so this loop has zero CPU cost while the window is minimized.
+    while (m_window.width() == 0 || m_window.height() == 0)
+        glfwWaitEvents();
+
     vkDeviceWaitIdle(m_ctx.device());
     destroy();
     create();

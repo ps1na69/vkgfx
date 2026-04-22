@@ -13,3 +13,4 @@
 #include "scene.h"
 #include "renderer.h"
 #include "collision.h"
+#include "profiler.h"

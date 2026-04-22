@@ -15,6 +15,7 @@
 
 #include <array>
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 
@@ -52,6 +53,9 @@ void Renderer::recordGBuffer(VkCommandBuffer cmd, Scene& scene, uint32_t frameId
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         m_gbufferLayout, 1, 1, &f.defaultMaterialSet, 0, nullptr);
 
+    m_drawCallCount = 0;
+    m_triangleCount = 0;
+
     for (Mesh* mesh : scene.visibleMeshes()) {
         MeshPush push{};
         push.model        = mesh->modelMatrix();
@@ -69,6 +73,9 @@ void Renderer::recordGBuffer(VkCommandBuffer cmd, Scene& scene, uint32_t frameId
         vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertexBuffer(), offsets);
         vkCmdBindIndexBuffer  (cmd, mesh->indexBuffer(), 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed      (cmd, mesh->indexCount(), 1, 0, 0, 0);
+
+        ++m_drawCallCount;
+        m_triangleCount += mesh->indexCount() / 3u;
     }
     vkCmdEndRenderPass(cmd);
 }
@@ -144,6 +151,11 @@ void Renderer::recordTonemap(VkCommandBuffer cmd, uint32_t frameIdx) {
         VK_SHADER_STAGE_FRAGMENT_BIT, 0, 8, &push);
 
     vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    // ImGui draw data appended into this render pass, on top of the tonemapped
+    // output — no extra pass or image layout transition required.
+    endImGuiFrame(cmd);
+
     vkCmdEndRenderPass(cmd);
     // Swapchain render pass finalLayout = PRESENT_SRC_KHR — no FG barrier needed.
 }
@@ -228,13 +240,13 @@ void Renderer::buildFrameGraph(Scene& scene, uint32_t frameIdx) {
             [&](PassBuilder& b) {
                 b.writeShadowMap(hShadow);
             },
-            [this, &scene](VkCommandBuffer cmd, const FrameGraphResources&) {
+            [this, &scene, frameIdx](VkCommandBuffer cmd, const FrameGraphResources&) {
+                m_profiler.beginPass(cmd, frameIdx, "shadow");
                 recordShadowPass(cmd, scene);
+                m_profiler.endPass(cmd, frameIdx);
             });
     }
 
-    // Point-light shadow cubemap pass — runs when at least one shadow-casting
-    // PointLight exists. Only the first such light fills the cube map slot.
     const bool hasPointShadow = std::any_of(
         scene.pointLights().begin(), scene.pointLights().end(),
         [](const auto& pl){ return pl && pl->enabled() && pl->castsShadow(); });
@@ -244,7 +256,9 @@ void Renderer::buildFrameGraph(Scene& scene, uint32_t frameIdx) {
                 b.writeShadowMap(hPointShadow);
             },
             [this, &scene, frameIdx](VkCommandBuffer cmd, const FrameGraphResources&) {
+                m_profiler.beginPass(cmd, frameIdx, "point_shadow");
                 recordPointShadowPass(cmd, scene, frameIdx);
+                m_profiler.endPass(cmd, frameIdx);
             });
     }
 
@@ -258,7 +272,9 @@ void Renderer::buildFrameGraph(Scene& scene, uint32_t frameIdx) {
             b.writeDepthAttachment(hDepth);
         },
         [this, &scene, frameIdx](VkCommandBuffer cmd, const FrameGraphResources&) {
+            m_profiler.beginPass(cmd, frameIdx, "gbuffer");
             recordGBuffer(cmd, scene, frameIdx);
+            m_profiler.endPass(cmd, frameIdx);
         });
 
     m_frameGraph->addPass("lighting",
@@ -274,17 +290,19 @@ void Renderer::buildFrameGraph(Scene& scene, uint32_t frameIdx) {
             b.writeColorAttachment(hHDR);
         },
         [this, frameIdx](VkCommandBuffer cmd, const FrameGraphResources&) {
+            m_profiler.beginPass(cmd, frameIdx, "lighting");
             recordLighting(cmd, frameIdx);
+            m_profiler.endPass(cmd, frameIdx);
         });
 
     m_frameGraph->addPass("tonemap",
         [&](PassBuilder& b) {
             b.read(hHDR);
-            // Swapchain image not tracked: its render pass handles the transition
-            // UNDEFINED → PRESENT_SRC_KHR via finalLayout.
         },
         [this, frameIdx](VkCommandBuffer cmd, const FrameGraphResources&) {
+            m_profiler.beginPass(cmd, frameIdx, "tonemap");
             recordTonemap(cmd, frameIdx);
+            m_profiler.endPass(cmd, frameIdx);
         });
 }
 
@@ -292,14 +310,33 @@ void Renderer::buildFrameGraph(Scene& scene, uint32_t frameIdx) {
 // render
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::render(Scene& scene) {
+    if (!m_initialized || m_shuttingDown) return;
+
+    m_frameStart = Clock::now();   // CPU timer — read after submit for accurate ms
+
     auto& f = m_frames[m_frameIdx];
 
     vkWaitForFences(m_ctx->device(), 1, f.inFlight.ptr(), VK_TRUE, UINT64_MAX);
+
+    // Profiler readback: previous frame's GPU timestamps are safe after fence wait
+    {
+        uint32_t prev = (m_frameIdx + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
+        float cpuMs   = std::chrono::duration<float, std::milli>(
+                            Clock::now() - m_frameStart).count();
+        m_profiler.readback(m_ctx->device(), prev,
+                            m_drawCallCount, m_triangleCount,
+                            m_ctx->vma(), cpuMs);
+    }
+
+    // ImGui new-frame: builds draw lists on the CPU before any GPU work
+    beginImGuiFrame();
+
     uploadMeshMaterials(scene);
 
     VkSemaphore acquireSem = m_acquireSemaphores[m_frameIdx].get();
     VkResult res = m_swapchain->acquireNext(acquireSem, m_swapIdx);
     if (res == VK_ERROR_OUT_OF_DATE_KHR) {
+        if (m_shuttingDown) return;  // ignore resize during teardown
         m_acquireSemaphores[m_frameIdx] = makeSemaphore(m_ctx->device());
         m_swapchain->recreate();
         return;
@@ -308,16 +345,20 @@ void Renderer::render(Scene& scene) {
 
     // ── Resize check (BEFORE resetting the fence) ─────────────────────────────
     // If the swapchain extent no longer matches our offscreen resources, rebuild
-    // them synchronously and skip this frame.  The fence is NOT reset here, so
-    // the next frame's WaitForFences call returns immediately (fence is still
-    // signaled from the previous submission).
+    // them synchronously and skip this frame.
     {
         const VkExtent2D sw = m_swapchain->extent();
         if (sw.width  != m_offscreenExtent.width ||
             sw.height != m_offscreenExtent.height) {
-            // rebuildOffscreenResources calls vkDeviceWaitIdle internally.
+            if (m_shuttingDown) return;
+
+            // acquireNext already SIGNALED acquireSem — we must not reuse it next
+            // frame without consuming it first, or validation will fire
+            // "semaphore must not be currently signaled".
+            // Replace it with a fresh unsignaled semaphore now.
+            m_acquireSemaphores[m_frameIdx] = makeSemaphore(m_ctx->device());
+
             rebuildOffscreenResources();
-            // Also recreate the swapchain so its framebuffers match the new extent.
             m_swapchain->recreate();
             return;
         }
@@ -392,6 +433,9 @@ void Renderer::render(Scene& scene) {
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(f.cmd, &bi);
 
+    // Profiler: GPU-reset this frame's query slots (must be the first GPU command)
+    m_profiler.beginFrame(f.cmd, m_frameIdx);
+
     m_frameGraph->reset();
     buildFrameGraph(scene, m_frameIdx);
     m_frameGraph->compile();
@@ -411,7 +455,8 @@ void Renderer::render(Scene& scene) {
     vkQueueSubmit(m_ctx->graphicsQ(), 1, &si, f.inFlight.get());
 
     res = m_swapchain->present(renderDoneSem, m_swapIdx);
-    if (needsRecreate || res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
+    if (!m_shuttingDown &&
+        (needsRecreate || res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR))
         m_swapchain->recreate();
 
     m_frameIdx = (m_frameIdx + 1) % MAX_FRAMES_IN_FLIGHT;

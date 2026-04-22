@@ -48,6 +48,14 @@ struct SSAOConfig {
     float    bias       = 0.025f;
 };
 
+/// GPU profiling overlay settings.
+/// Requires the engine to be built with -DVKGFX_ENABLE_PROFILING=ON.
+/// When that flag is absent, all profiling code compiles to no-ops.
+struct ProfilingConfig {
+    bool enabled     = false;  ///< Activate GPU timestamp queries and overlay
+    bool showOverlay = true;   ///< Show the ImGui overlay window automatically each frame
+};
+
 /// Top-level renderer configuration
 struct RendererConfig {
     // Window / device
@@ -59,9 +67,10 @@ struct RendererConfig {
     std::string assetDir    = "assets";
 
     // Passes
-    IBLConfig   ibl;
-    SunConfig   sun;
-    SSAOConfig  ssao;
+    IBLConfig       ibl;
+    SunConfig       sun;
+    SSAOConfig      ssao;
+    ProfilingConfig profiling;
 
     // Debug
     GBufferDebugView gbufferDebug = GBufferDebugView::None;

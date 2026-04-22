@@ -5,6 +5,10 @@ on:
     branches: [main, refactor]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
 
 # ── Linux ──────────────────────────────────────────────────────────────────────
@@ -28,15 +32,15 @@ jobs:
             vulkan-validationlayers \
             libglfw3-dev \
             libglm-dev \
-            glslang-tools \
+            glslc \
             spirv-tools \
             ninja-build \
-            xvfb
-
-      - name: Install glslc
-        run: |
-          # glslc is in the Vulkan SDK; fall back to glslang if not available
-          which glslc || sudo apt-get install -y glslc || true
+            xvfb \
+            mesa-vulkan-drivers \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev
 
       - name: Configure
         run: |
@@ -45,14 +49,13 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DVKGFX_BUILD_TESTS=ON \
             -DVKGFX_BUILD_EXAMPLES=ON \
-            -DVKGFX_ENABLE_VALIDATION=ON
+            -DVKGFX_ENABLE_VALIDATION=ON \
+            -DVKGFX_ENABLE_PROFILING=ON
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build_type }} -j4
 
-      - name: Run tests (headless — no display needed)
-        # test_render_pass and test_vertex_layout are headless; skip test_ibl_load
-        # if sky.hdr is absent (CI does not have it, test skips gracefully)
+      - name: Run tests
         run: |
           cd build
           ctest --build-config ${{ matrix.build_type }} \
@@ -64,30 +67,19 @@ jobs:
 
       - name: Verify install layout
         run: |
-          echo "=== Installed files ==="
-          find /tmp/vkgfx-install -type f | sort
-
-          # Headers
-          test -d /tmp/vkgfx-install/include/vkgfx
           test -f /tmp/vkgfx-install/include/vkgfx/vkgfx.h
-          test -f /tmp/vkgfx-install/include/vkgfx/config.h
           test -f /tmp/vkgfx-install/include/vkgfx/renderer.h
-
-          # Library
+          test -f /tmp/vkgfx-install/include/vkgfx/profiler.h
           test -f /tmp/vkgfx-install/lib/libvkgfx.a
-
-          # CMake package
           test -f /tmp/vkgfx-install/lib/cmake/vkgfx/vkgfxTargets.cmake
           test -f /tmp/vkgfx-install/lib/cmake/vkgfx/vkgfxConfig.cmake
           test -f /tmp/vkgfx-install/lib/cmake/vkgfx/vkgfxConfigVersion.cmake
-
-          echo "=== Install layout OK ==="
+          echo "Install layout OK"
 
       - name: Package (Release only)
         if: matrix.build_type == 'Release'
         run: |
-          cd /tmp
-          tar czf vkgfx-linux-x64.tar.gz vkgfx-install/
+          cd /tmp && tar czf vkgfx-linux-x64.tar.gz vkgfx-install/
 
       - name: Upload artifact
         if: matrix.build_type == 'Release'
@@ -126,7 +118,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DVKGFX_BUILD_TESTS=ON `
-            -DVKGFX_BUILD_EXAMPLES=ON
+            -DVKGFX_BUILD_EXAMPLES=ON `
+            -DVKGFX_ENABLE_PROFILING=ON
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build_type }} -j4
@@ -142,17 +135,18 @@ jobs:
         run: cmake --install build --prefix C:/vkgfx-install --config ${{ matrix.build_type }}
 
       - name: Verify install layout
-        run: |
-          Test-Path "C:/vkgfx-install/include/vkgfx/vkgfx.h"    | Should -Be $true
-          Test-Path "C:/vkgfx-install/lib/vkgfx.lib"             | Should -Be $true
-          Test-Path "C:/vkgfx-install/lib/cmake/vkgfx/vkgfxTargets.cmake" | Should -Be $true
         shell: pwsh
+        run: |
+          if (-not (Test-Path "C:/vkgfx-install/include/vkgfx/vkgfx.h"))    { exit 1 }
+          if (-not (Test-Path "C:/vkgfx-install/include/vkgfx/profiler.h"))  { exit 1 }
+          if (-not (Test-Path "C:/vkgfx-install/lib/vkgfx.lib"))             { exit 1 }
+          if (-not (Test-Path "C:/vkgfx-install/lib/cmake/vkgfx/vkgfxTargets.cmake")) { exit 1 }
+          echo "Install layout OK"
 
       - name: Package (Release only)
         if: matrix.build_type == 'Release'
-        run: |
-          Compress-Archive -Path C:/vkgfx-install -DestinationPath vkgfx-windows-x64.zip
         shell: pwsh
+        run: Compress-Archive -Path C:/vkgfx-install -DestinationPath vkgfx-windows-x64.zip
 
       - name: Upload artifact
         if: matrix.build_type == 'Release'

@@ -9,6 +9,12 @@
 #include <vkgfx/scene.h>
 #include <vkgfx/material.h>
 
+#ifdef VKGFX_ENABLE_PROFILING
+#  include <imgui.h>
+#  include <imgui_impl_glfw.h>
+#  include <imgui_impl_vulkan.h>
+#endif
+
 // VMA is included only in context.cpp where VMA_IMPLEMENTATION is defined.
 // Here we only need VmaAllocation through the AllocatedBuffer/Image types.
 #include <vk_mem_alloc.h>
@@ -50,7 +56,7 @@ namespace vkgfx {
     // ── Construction ──────────────────────────────────────────────────────────────
 
     Renderer::Renderer(Window& window, RendererConfig cfg)
-        : m_cfg(std::move(cfg))
+        : m_cfg(std::move(cfg)), m_window(&window)
     {
 #ifdef VKGFX_ENABLE_VALIDATION
         m_cfg.validationLayers = true;
@@ -86,10 +92,21 @@ namespace vkgfx {
         if (m_cfg.ibl.enabled)
             initIBL();
 
+        // Profiler and ImGui — initialised last so all Vulkan objects are ready
+        if (m_cfg.profiling.enabled) {
+            m_profiler.init(*m_ctx, MAX_FRAMES_IN_FLIGHT);
+            if (m_cfg.profiling.showOverlay)
+                initImGui();
+        }
+
         m_initialized = true;
     }
 
     Renderer::~Renderer() {
+        // Always release frame graph lambdas first, even if shutdown() was not
+        // called, to avoid std::function holding dangling captured references
+        // while member destructors are running in reverse declaration order.
+        if (m_frameGraph) m_frameGraph->reset();
         if (m_initialized) shutdown();
     }
 
@@ -1699,7 +1716,7 @@ namespace vkgfx {
         shutdown();
         m_cfg = cfg;
         initDescriptorPools();
-        initDefaultTextures();  // must be before initPerFrameResources (uses fallback textures)
+        initDefaultTextures();
         initShadowPass();
         initPointShadowPass();
         initGBuffer();
@@ -1707,6 +1724,11 @@ namespace vkgfx {
         initTonemapPass();
         initPerFrameResources();
         if (m_cfg.ibl.enabled) initIBL();
+        if (m_cfg.profiling.enabled) {
+            m_profiler.init(*m_ctx, MAX_FRAMES_IN_FLIGHT);
+            if (m_cfg.profiling.showOverlay)
+                initImGui();
+        }
         m_initialized = true;
     }
 
@@ -1789,7 +1811,16 @@ namespace vkgfx {
 
     void Renderer::shutdown() {
         if (!m_initialized) return;
+        m_shuttingDown = true;
+
         vkDeviceWaitIdle(m_ctx->device());
+
+        // Release frame graph lambdas first to avoid dangling captured references.
+        if (m_frameGraph) m_frameGraph->reset();
+
+        // ImGui must be shut down before Vulkan objects it references are freed.
+        if (m_imguiInitialized) shutdownImGui();
+        m_profiler.destroy(m_ctx->device());
 
         for (auto& f : m_frames) {
             m_ctx->destroyBuffer(f.sceneUbo);
@@ -1868,7 +1899,8 @@ namespace vkgfx {
         m_acquireSemaphores.clear();
         m_renderFinishedSems.clear();
 
-        m_initialized = false;
+        m_initialized  = false;
+        m_shuttingDown = false;
     }
 
     // ── rebuildOffscreenResources ─────────────────────────────────────────────────
@@ -1879,6 +1911,11 @@ namespace vkgfx {
     // extent-independent and never need to be re-created on resize.
 
     void Renderer::rebuildOffscreenResources() {
+        // Do not attempt to rebuild while shutting down — the swapchain and
+        // G-buffer images are already being destroyed, any resize event that
+        // arrives via vkDeviceWaitIdle's Win32 message pump must be ignored.
+        if (m_shuttingDown) return;
+
         vkDeviceWaitIdle(m_ctx->device());
 
         VkExtent2D newExt = m_swapchain->extent();
@@ -1993,6 +2030,125 @@ namespace vkgfx {
 
         std::cout << "[vkgfx] Offscreen resources rebuilt: "
                   << newExt.width << "×" << newExt.height << "\n";
+
+        // ImGui fonts / descriptor sets are not extent-dependent — no rebuild needed.
+    }
+
+    // ── initImGui ─────────────────────────────────────────────────────────────────
+    // Sets up Dear ImGui with the Vulkan + GLFW backends.  Creates a private
+    // descriptor pool (ImGui manages its own descriptor sets internally).
+    // Uploads the default font atlas via a one-shot command buffer.
+    // Compiled to a no-op stub unless VKGFX_ENABLE_PROFILING is defined.
+
+    void Renderer::initImGui() {
+#ifdef VKGFX_ENABLE_PROFILING
+        if (!m_window) return;
+
+        // Dedicated pool for ImGui — one combined-image-sampler per font texture
+        // plus a safety margin for any user-added textures.
+        VkDescriptorPoolSize poolSizes[] = {
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16 },
+        };
+        VkDescriptorPoolCreateInfo pci{};
+        pci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        pci.maxSets       = 16;
+        pci.poolSizeCount = 1;
+        pci.pPoolSizes    = poolSizes;
+        vkCreateDescriptorPool(m_ctx->device(), &pci, nullptr, &m_imguiPool);
+
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+
+        ImGuiIO& io = ImGui::GetIO();
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        io.IniFilename  = nullptr;  // disable imgui.ini — keeps the output dir clean
+
+        // Style: dark + rounded corners, semi-transparent windows
+        ImGui::StyleColorsDark();
+        ImGui::GetStyle().WindowRounding   = 6.f;
+        ImGui::GetStyle().FrameRounding    = 4.f;
+        ImGui::GetStyle().GrabRounding     = 4.f;
+        ImGui::GetStyle().WindowBorderSize = 0.f;
+
+        ImGui_ImplGlfw_InitForVulkan(m_window->handle(), /*install_callbacks=*/true);
+
+        ImGui_ImplVulkan_InitInfo ii{};
+        ii.Instance        = m_ctx->instance();
+        ii.PhysicalDevice  = m_ctx->gpu();
+        ii.Device          = m_ctx->device();
+        ii.QueueFamily     = m_ctx->queues().graphics;
+        ii.Queue           = m_ctx->graphicsQ();
+        ii.DescriptorPool  = m_imguiPool;
+        ii.RenderPass      = m_swapchain->renderPass(); // tonemap → swapchain pass
+        ii.MinImageCount   = 2;
+        ii.ImageCount      = m_swapchain->imageCount();
+        ii.MSAASamples     = VK_SAMPLE_COUNT_1_BIT;    // swapchain image is 1x
+        ImGui_ImplVulkan_Init(&ii);
+
+        // Upload font atlas via a one-shot command buffer
+        VkCommandBuffer cmd = m_ctx->beginOneShot();
+        ImGui_ImplVulkan_CreateFontsTexture();
+        m_ctx->endOneShot(cmd);
+        ImGui_ImplVulkan_DestroyFontsTexture();  // free CPU-side staging data
+
+        m_imguiInitialized = true;
+        std::cout << "[vkgfx][INFO] ImGui overlay initialised\n";
+#endif
+    }
+
+    // ── shutdownImGui ─────────────────────────────────────────────────────────────
+
+    void Renderer::shutdownImGui() {
+#ifdef VKGFX_ENABLE_PROFILING
+        if (!m_imguiInitialized) return;
+        vkDeviceWaitIdle(m_ctx->device());
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        if (m_imguiPool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(m_ctx->device(), m_imguiPool, nullptr);
+            m_imguiPool = VK_NULL_HANDLE;
+        }
+        m_imguiInitialized = false;
+#endif
+    }
+
+    // ── beginImGuiFrame ───────────────────────────────────────────────────────────
+    // Called at the very start of render() on the CPU, before GPU commands.
+    // Starts a new ImGui frame, calls user ImGui code and the profiler overlay.
+    // The resulting draw data is consumed by endImGuiFrame() at record time.
+
+    void Renderer::beginImGuiFrame() {
+#ifdef VKGFX_ENABLE_PROFILING
+        if (!m_imguiInitialized) return;
+        ImGui_ImplVulkan_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        // Built-in profiler overlay
+        if (m_cfg.profiling.showOverlay)
+            m_profiler.renderOverlay();
+
+        // User-registered ImGui callback
+        if (m_imguiCallback)
+            m_imguiCallback();
+
+        ImGui::Render();
+#endif
+    }
+
+    // ── endImGuiFrame ─────────────────────────────────────────────────────────────
+    // Submits ImGui draw data into the active command buffer.
+    // Must be called while the swapchain render pass is active (inside recordTonemap).
+
+    void Renderer::endImGuiFrame(VkCommandBuffer cmd) {
+#ifdef VKGFX_ENABLE_PROFILING
+        if (!m_imguiInitialized) return;
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+#else
+        (void)cmd;
+#endif
     }
 
 } // namespace vkgfx

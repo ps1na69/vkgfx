@@ -13,6 +13,7 @@
 #include <vkgfx/vkgfx.h>
 #include <iostream>
 #include <filesystem>
+#include <unordered_set>
 #include <chrono>
 #include <vector>
 #include <cmath>
@@ -53,7 +54,9 @@ int main(int argc, char** argv) {
     cfg.sun.intensity      = 4.0f;
     cfg.sun.color[0] = cfg.sun.color[1] = cfg.sun.color[2] = 1.f;
     cfg.gbufferDebug       = GBufferDebugView::None;
-	cfg.msaa = MSAASamples::x8;
+    cfg.msaa               = MSAASamples::x8;
+    cfg.profiling.enabled     = true;  // GPU timestamp overlay (top-right corner)
+    cfg.profiling.showOverlay = true;
 
     if (argc > 1) cfg = RendererConfig::fromFile(argv[1]);
 
@@ -88,7 +91,7 @@ int main(int argc, char** argv) {
     Window   window("vkgfx — deferred PBR + IBL", 1920, 1080);
     Renderer renderer(window, cfg);
     Context& ctx = renderer.context();
-    window.setFullscreen(true);
+    window.setFullscreen(false);
 
     // ── Camera ────────────────────────────────────────────────────────────────
     Camera cam;
@@ -305,12 +308,30 @@ int main(int argc, char** argv) {
         renderer.render(scene);
     }
 
-    // Cleanup
-    vkDeviceWaitIdle(ctx.device());
-    for (auto& m : meshes) m->destroy(ctx);
-    meshes.clear();
-
+    // ── Shutdown ──────────────────────────────────────────────────────────────
+    // Correct teardown order:
+    //   1. renderer.shutdown() — calls vkDeviceWaitIdle, destroys all Vulkan
+    //      pipeline/image/descriptor objects. Does NOT destroy m_ctx (Context +
+    //      VMA), so 'ctx' remains valid for buffer destruction below.
+    //   2. Destroy mesh GPU buffers (VBO/IBO) — safe because GPU is now idle.
+    //   3. Renderer + Window destructors run (stack unwind) — ~Renderer()
+    //      destroys m_ctx (VMA allocator) last.
     renderer.shutdown();
+
+    // Destroy every mesh that was GPU-uploaded, using scene.meshes() so we
+    // catch both the grid/showcase spheres AND the 169 ground tiles that were
+    // never tracked in the local 'meshes' vector.
+    {
+        std::unordered_set<Mesh*> destroyed;
+        for (auto& m : scene.meshes()) {
+            if (m && m->uploaded() && destroyed.find(m.get()) == destroyed.end()) {
+                m->destroy(ctx);
+                destroyed.insert(m.get());
+            }
+        }
+    }
+    meshes.clear();  // release shared_ptr refs (GPU buffers already freed above)
+
     std::cout << "[example] clean exit\n";
     return 0;
 }

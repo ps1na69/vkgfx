@@ -10,6 +10,7 @@ add_executable(vkgfx_tests
     test_render_pass.cpp
     test_ibl_load.cpp
     test_vertex_layout.cpp
+    test_headless_smoke.cpp
 )
 
 target_link_libraries(vkgfx_tests

@@ -6,10 +6,13 @@
 #include "scene.h"
 #include "ibl.h"
 #include "frame_graph.h"
+#include "profiler.h"
 
 #include <vulkan/vulkan.h>
 #include <memory>
 #include <array>
+#include <chrono>
+#include <functional>
 
 namespace vkgfx {
 
@@ -36,6 +39,18 @@ public:
     [[nodiscard]] const RendererConfig& config()  const { return m_cfg; }
     [[nodiscard]] Context&              context() const { return *m_ctx; }
 
+    // ── GPU Profiler public API ───────────────────────────────────────────────
+
+    /// Read the last completed frame's timing stats.
+    /// Returns zeros when VKGFX_ENABLE_PROFILING is not defined.
+    [[nodiscard]] const FrameStats& profilerStats() const { return m_profiler.stats(); }
+
+    /// Register a callback invoked every frame inside the ImGui scope,
+    /// after the built-in profiler overlay has been drawn.
+    /// Use this to add your own ImGui windows without managing the frame lifecycle.
+    /// No-op when VKGFX_ENABLE_PROFILING is not defined.
+    void setImGuiCallback(std::function<void()> cb) { m_imguiCallback = std::move(cb); }
+
 private:
     // ── Init phases ───────────────────────────────────────────────────────────
     void initDescriptorPools();
@@ -49,46 +64,59 @@ private:
     void initPointShadowPass();
     void validateAssets();
     void uploadMeshMaterials(Scene& scene);
-
-    // Destroy and re-create G-buffer images, HDR target, and their framebuffers
-    // at the current m_swapchain->extent().  Re-writes affected descriptor sets.
-    // Called from render() when the swapchain is resized.
     void rebuildOffscreenResources();
+
+    // ── ImGui lifecycle (compiled away when VKGFX_ENABLE_PROFILING is absent) ─
+    void initImGui();
+    void shutdownImGui();
+    void beginImGuiFrame();
+    void endImGuiFrame(VkCommandBuffer cmd);
 
     // ── Per-pass recording ────────────────────────────────────────────────────
     void recordShadowPass     (VkCommandBuffer cmd, Scene& scene);
     void recordPointShadowPass(VkCommandBuffer cmd, Scene& scene, uint32_t frameIdx);
     void recordGBuffer        (VkCommandBuffer cmd, Scene& scene, uint32_t frameIdx);
-    void recordLighting  (VkCommandBuffer cmd, uint32_t frameIdx);
-    void recordTonemap   (VkCommandBuffer cmd, uint32_t frameIdx);
+    void recordLighting       (VkCommandBuffer cmd, uint32_t frameIdx);
+    void recordTonemap        (VkCommandBuffer cmd, uint32_t frameIdx);
 
     // ── Frame graph ───────────────────────────────────────────────────────────
     void buildFrameGraph(Scene& scene, uint32_t frameIdx);
 
     VkShaderModule loadShaderModule(const std::string& name) const;
 
-    // ── Owned objects ─────────────────────────────────────────────────────────
-    RendererConfig             m_cfg;
-    std::unique_ptr<Context>   m_ctx;
-    std::unique_ptr<Swapchain> m_swapchain;
-    std::unique_ptr<IBLSystem> m_ibl;
-
-    // FrameGraph is a unique_ptr because it takes Context& in its ctor,
-    // and m_ctx isn't assigned until inside the constructor body.
+    // ── Core objects ──────────────────────────────────────────────────────────
+    RendererConfig              m_cfg;
+    Window*                     m_window = nullptr;     // non-owning, for ImGui GLFW backend
+    std::unique_ptr<Context>    m_ctx;
+    std::unique_ptr<Swapchain>  m_swapchain;
+    std::unique_ptr<IBLSystem>  m_ibl;
     std::unique_ptr<FrameGraph> m_frameGraph;
 
-    // G-buffer attachments:
-    //   [0]=albedo  [1]=normal  [2]=RMA  [3]=emissive  [4]=shadowCoord  [5]=depth
-    std::array<AllocatedImage, 6> m_gbuffer{};
+    // ── GPU profiler ──────────────────────────────────────────────────────────
+    GpuProfiler           m_profiler;
+    VkDescriptorPool      m_imguiPool         = VK_NULL_HANDLE;
+    bool                  m_imguiInitialized  = false;
+    std::function<void()> m_imguiCallback;
 
+    // Per-frame draw statistics
+    uint32_t m_drawCallCount = 0;
+    uint64_t m_triangleCount = 0;
+
+    // CPU frame timer
+    using Clock     = std::chrono::steady_clock;
+    using TimePoint = std::chrono::time_point<Clock>;
+    TimePoint m_frameStart{};
+
+    // ── G-buffer attachments ──────────────────────────────────────────────────
+    std::array<AllocatedImage, 6> m_gbuffer{};
     AllocatedImage m_hdrTarget{};
 
     VkRenderPass  m_gbufferPass  = VK_NULL_HANDLE;
     VkRenderPass  m_lightingPass = VK_NULL_HANDLE;
-
     VkFramebuffer m_gbufferFb    = VK_NULL_HANDLE;
     VkFramebuffer m_lightingFb   = VK_NULL_HANDLE;
 
+    // ── Directional shadow ────────────────────────────────────────────────────
     AllocatedImage      m_shadowMap{};
     VkRenderPass        m_shadowPass       = VK_NULL_HANDLE;
     VkFramebuffer       m_shadowFb         = VK_NULL_HANDLE;
@@ -98,11 +126,9 @@ private:
     static constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
     // ── Point-light shadow cubemap ────────────────────────────────────────────
-    // One 512² cubemap covers light index 0 (first enabled PointLight).
-    // Extend to a VkImageViewType::eCubeArray + loop for multiple casters.
     AllocatedImage    m_pointShadowCube{};
-    VkImageView       m_pointCubeFaceViews[6]  = {};       // 2D per-layer, for FBs
-    VkImageView       m_pointCubeSamplerView   = VK_NULL_HANDLE; // CUBE, for shader
+    VkImageView       m_pointCubeFaceViews[6]  = {};
+    VkImageView       m_pointCubeSamplerView   = VK_NULL_HANDLE;
     VkRenderPass      m_pointShadowPass        = VK_NULL_HANDLE;
     VkFramebuffer     m_pointShadowFbs[6]      = {};
     VkSampler         m_pointShadowSampler     = VK_NULL_HANDLE;
@@ -111,6 +137,7 @@ private:
     VkPipeline        m_pointShadowPipeline    = VK_NULL_HANDLE;
     static constexpr uint32_t POINT_SHADOW_SIZE = 512;
 
+    // ── Pipelines ─────────────────────────────────────────────────────────────
     VkPipelineLayout m_gbufferLayout    = VK_NULL_HANDLE;
     VkPipeline       m_gbufferPipeline  = VK_NULL_HANDLE;
     VkPipelineLayout m_lightingLayout   = VK_NULL_HANDLE;
@@ -118,6 +145,7 @@ private:
     VkPipelineLayout m_tonemapLayout    = VK_NULL_HANDLE;
     VkPipeline       m_tonemapPipeline  = VK_NULL_HANDLE;
 
+    // ── Descriptor set layouts ────────────────────────────────────────────────
     VkDescriptorSetLayout m_gbufferSetLayout   = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_materialSetLayout  = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_lightingSetLayout  = VK_NULL_HANDLE;
@@ -125,6 +153,7 @@ private:
     VkDescriptorSetLayout m_iblSetLayout       = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_tonemapSetLayout   = VK_NULL_HANDLE;
 
+    // ── Samplers + fallbacks ──────────────────────────────────────────────────
     VkSampler m_gbufferSampler  = VK_NULL_HANDLE;
     VkSampler m_hdrSampler      = VK_NULL_HANDLE;
     VkSampler m_fallbackSampler = VK_NULL_HANDLE;
@@ -146,12 +175,12 @@ private:
         VkDescriptorSet lightingSceneSet   = VK_NULL_HANDLE;
         VkDescriptorSet iblSet             = VK_NULL_HANDLE;
         VkDescriptorSet tonemapSet         = VK_NULL_HANDLE;
-        VkDescriptorSet pointShadowDs      = VK_NULL_HANDLE; // set=0 for point_shadow pass
+        VkDescriptorSet pointShadowDs      = VK_NULL_HANDLE;
 
         AllocatedBuffer sceneUbo{};
         AllocatedBuffer lightUbo{};
         AllocatedBuffer defaultParamsUbo{};
-        AllocatedBuffer pointShadowLightUbo{};  // vec4: xyz=lightPos, w=farPlane
+        AllocatedBuffer pointShadowLightUbo{};
     };
 
     std::array<PerFrame, MAX_FRAMES_IN_FLIGHT> m_frames{};
@@ -161,13 +190,12 @@ private:
 
     std::vector<AllocatedBuffer> m_materialUbos;
 
-    // Extent at which G-buffer / HDR images were allocated.
-    // Compared with m_swapchain->extent() each frame to detect resize.
     VkExtent2D m_offscreenExtent{};
 
-    uint32_t m_frameIdx    = 0;
-    uint32_t m_swapIdx     = 0;
-    bool     m_initialized = false;
+    uint32_t m_frameIdx     = 0;
+    uint32_t m_swapIdx      = 0;
+    bool     m_initialized  = false;
+    bool     m_shuttingDown = false;
 };
 
 } // namespace vkgfx
