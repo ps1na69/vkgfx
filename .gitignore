@@ -1,49 +1,227 @@
 ```
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-
-# Environment
-.env
-.env.local
-.env.*
-
-# Editors
-.vscode/
-.idea/
-
-# Dependencies
-node_modules/
-.venv/
-venv/
-__pycache__/
-.mypy_cache/
-.pytest_cache/
-.julia/
-zig*/
-target/
-.gradle/
-
-# Build artifacts
-dist/
-build/
+# Compiled and build artifacts
 *.pyc
-*.class
+__pycache__/
 *.o
+*.obj
 *.exe
 *.dll
 *.so
 *.a
-*.obj
 *.out
+dist/
+build/
+target/
 
-# Coverage
+# Dependencies
+.venv/
+venv/
+.env
+.env.local
+.env.*
+node_modules/
+.julia/
+zig*/
+.jekyll-cache/
+.hugo_build.lock
+.dart_tool/
+.pub/
+.mypy_cache/
+.pytest_cache/
+.nyc_output/
+.npm/
+.yarn/
+.pnp.*
+.pnp.js
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+*.backup
+*.cache
+*.jar
+*.war
+*.zip
+*.tar
+*.gz
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+Icon?
+VolumeIcon.icns
+
+# Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.tmproj
+*.xcworkspace
+*.xcodeproj
+nbproject/
+
+# Coverage reports
 coverage/
 htmlcov/
 .coverage
+*.cover
+coverage.xml
+*.gcda
+*.gcno
 
-# System files
-.DS_Store
-Thumbs.db
+# Environment specific
+.env
+.env.local
+.env.dev
+.env.test
+.env.production
+.env.staging
+.env.backup
+*.env
+*.env~
+.env~
+.env.*.example
+.env.*.local
+.env.*.sample
+.env.*.template
+.env.*.default
+.env.*
+
+# Python specific
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Node.js specific
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+node_modules/
+jspm_packages/
+
+# Java specific
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+hs_err_pid*
+replay_pid*
+
+# C/C++ specific
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+*.exe
+*.out
+*.pyd
+*.so
+*.dll.a
+*.objdump
+*.ii
+*.s
+*.S
+*.i
+*.ii
+*.bc
+*.ll
+*.sln
+*.vcxproj
+*.vcproj
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.vcxproj.filters
+Makefile.in
+Makefile
+
+# Go specific
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.prof
+
+# Ruby specific
+*.gem
+*.rbc
+extconf.rb
+Gemfile.lock
+config.ru
+
+# Rust specific
+*.so
+*.dylib
+*.dll
+target/
+Cargo.lock
+
+# Julia specific
+.julia/
+*.ji
+*.jl.cov
+*.jl.so
+
+# Build scripts (since they were modified, we might want to preserve them but ignore outputs)
+build/
+dist/
+*.bat
+*.sh
+!build_release.bat
+!build_release.sh
+
+# Ignore build outputs but keep the scripts themselves
+*.out
+*.bin
+*.app
+*.exe
 ```
