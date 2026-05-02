@@ -9,11 +9,29 @@ option(VKGFX_BUILD_EXAMPLES    "Build example applications"               ON)
 option(VKGFX_BUILD_TESTS       "Build unit tests"                         ON)
 option(VKGFX_ENABLE_VALIDATION "Enable Vulkan validation layers in Debug"  ON)
 
-# ── Vulkan ─────────────────────────────────────────────────────────────────────
-find_package(Vulkan REQUIRED)
-
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
+
+# ── Vulkan ─────────────────────────────────────────────────────────────────────
+find_package(Vulkan QUIET)
+
+if(NOT Vulkan_FOUND)
+    message(STATUS "Vulkan SDK не знайдено. Автоматичне завантаження заголовків через FetchContent...")
+    include(FetchContent)
+    FetchContent_Declare(
+        vulkan_headers
+        GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+        GIT_TAG v1.3.281
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(vulkan_headers)
+
+    # Створюємо легка ціль, яка дає лише шляхи до заголовків
+    add_library(vulkan_headers_auto INTERFACE IMPORTED)
+    target_include_directories(vulkan_headers_auto SYSTEM INTERFACE
+        ${vulkan_headers_SOURCE_DIR}/include
+    )
+endif()
 
 # ── GLFW ──────────────────────────────────────────────────────────────────────
 find_package(glfw3 3.3 QUIET)
@@ -224,9 +242,14 @@ endif()
 # fastgltf — link to the imported target; it brings its own include dirs
 target_link_libraries(vkgfx PRIVATE $<BUILD_INTERFACE:fastgltf>)
 
+if(Vulkan_FOUND)
+    target_link_libraries(vkgfx PUBLIC Vulkan::Vulkan)
+else()
+    target_link_libraries(vkgfx PUBLIC vulkan_headers_auto)
+endif()
+
 target_link_libraries(vkgfx
     PUBLIC
-        Vulkan::Vulkan
         $<BUILD_INTERFACE:${VKGFX_GLFW_TARGET}>
     PRIVATE
         $<BUILD_INTERFACE:${VKGFX_GLM_TARGET}>)

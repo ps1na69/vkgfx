@@ -27,14 +27,13 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y \
-            # libvulkan-dev прибрано: заголовки підтягуються через FetchContent
             vulkan-validationlayers \
             libglfw3-dev libglm-dev \
             glslc spirv-tools ninja-build \
             xvfb mesa-vulkan-drivers \
             libxrandr-dev libxinerama-dev \
             libxcursor-dev libxi-dev \
-            libvulkan1  # потрібен тільки runtime для тестів
+            libvulkan1
 
       - name: Configure
         run: |
