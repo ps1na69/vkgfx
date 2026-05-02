@@ -51,6 +51,7 @@ if [[ "$PLATFORM" == "windows" ]]; then
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
         -DVKGFX_BUILD_EXAMPLES=OFF \
         -DVKGFX_BUILD_TESTS=OFF \
+        -DVKGFX_ENABLE_VALIDATION=OFF \
         -DCMAKE_INSTALL_PREFIX="../${RELEASE_DIR}" \
         -DBUILD_SHARED_LIBS=OFF
 else
@@ -59,6 +60,7 @@ else
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
         -DVKGFX_BUILD_EXAMPLES=OFF \
         -DVKGFX_BUILD_TESTS=OFF \
+        -DVKGFX_ENABLE_VALIDATION=OFF \
         -DCMAKE_INSTALL_PREFIX="../${RELEASE_DIR}" \
         -DBUILD_SHARED_LIBS=OFF
 fi
@@ -225,7 +227,7 @@ int main() {
 ### Important Notes
 
 1. **Shaders**: The \`bin/shaders/\` folder must be copied to your executable's working directory
-2. **Validation Layers**: Enable in debug builds for error messages (requires Vulkan SDK)
+2. **Validation Layers**: This release build has validation layers **DISABLED** for better performance and smaller size. For development, build from source with \`VKGFX_ENABLE_VALIDATION=ON\`.
 3. **GLFW**: vkgfx uses GLFW internally - it's statically linked in this release
 4. **Other dependencies**: GLM, stb, tinyobjloader, fastgltf are all statically linked
 

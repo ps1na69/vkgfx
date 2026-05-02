@@ -44,10 +44,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Setup Vulkan
-      run: |
-        # Vulkan SDK is pre-installed on Windows runners
-        echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
+    - name: Setup Vulkan SDK
+      uses: humbletim/install-vulkan-sdk@v1.2
+      with:
+        version: latest
+        cache: false
     
     - name: Build Windows release
       shell: cmd
