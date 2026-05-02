@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
     {
         auto path = resolveFirst({
             cfg.ibl.hdrPath, "assets/sky.hdr", "../assets/sky.hdr",
-            "../../assets/sky.hdr"
+            "../../assets/sky.hdr","../../../assets/sky.hdr"
         });
         if (std::filesystem::exists(path)) {
             cfg.ibl.hdrPath = path;
