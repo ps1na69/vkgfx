@@ -105,7 +105,6 @@ jobs:
         uses: humbletim/install-vulkan-sdk@v1.1.1
         with:
           version: latest
-          cache: true
 
       - name: Install glfw + glm via vcpkg
         run: |
