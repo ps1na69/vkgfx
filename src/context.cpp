@@ -212,26 +212,19 @@ void Context::createLogicalDevice(const ContextConfig& cfg) {
     features.samplerAnisotropy = VK_TRUE;
     features.shaderStorageImageWriteWithoutFormat = VK_TRUE;  // for compute IBL
 
-    // Vulkan 1.2 features — hostQueryReset allows vkResetQueryPool() from CPU
-    // (used by GpuProfiler::init to put the query pool in a defined state).
-    VkPhysicalDeviceVulkan12Features features12{};
-    features12.sType           = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    features12.hostQueryReset  = VK_TRUE;
-
-    // Vulkan 1.3 features — synchronization2 is required for vkCmdPipelineBarrier2
-    // which is already used by the FrameGraph.
+    // Vulkan 1.3 core features via pNext chain.
+    // synchronization2 is required for vkCmdPipelineBarrier2 (used by FrameGraph)
+    // and vkCmdWriteTimestamp2 (used by GpuProfiler).
     VkPhysicalDeviceVulkan13Features features13{};
-    features13.sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    features13.synchronization2 = VK_TRUE;
-    features13.dynamicRendering = VK_TRUE;
-
-    // Chain: features2 → features12 → features13
-    features12.pNext = &features13;
+    features13.sType          = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    features13.synchronization2  = VK_TRUE;
+    features13.dynamicRendering  = VK_TRUE;  // future render-pass-free passes
+    features13.maintenance4      = VK_TRUE;
 
     VkPhysicalDeviceFeatures2 features2{};
     features2.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     features2.features = features;
-    features2.pNext    = &features12;
+    features2.pNext    = &features13;
 
     std::vector<const char*> deviceExts = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
@@ -239,7 +232,7 @@ void Context::createLogicalDevice(const ContextConfig& cfg) {
     ci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     ci.queueCreateInfoCount    = static_cast<uint32_t>(queueCIs.size());
     ci.pQueueCreateInfos       = queueCIs.data();
-    ci.pEnabledFeatures        = nullptr;   // must be null when using pNext Features2 chain
+    ci.pEnabledFeatures        = nullptr;    // must be null when using Features2 pNext
     ci.pNext                   = &features2;
     ci.enabledExtensionCount   = static_cast<uint32_t>(deviceExts.size());
     ci.ppEnabledExtensionNames = deviceExts.data();

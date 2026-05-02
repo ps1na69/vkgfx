@@ -1,0 +1,92 @@
+name: Build Release Packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libvulkan-dev \
+          vulkan-validationlayers-dev \
+          glslc \
+          zip
+    
+    - name: Build Linux release
+      run: |
+        chmod +x build_release.sh
+        ./build_release.sh linux release
+    
+    - name: Upload Linux artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: vkgfx-linux-release
+        path: release/vkgfx-linux-x86_64-release.zip
+        retention-days: 30
+
+  build-windows:
+    runs-on: windows-2022
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Vulkan
+      run: |
+        # Vulkan SDK is pre-installed on Windows runners
+        echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
+    
+    - name: Build Windows release
+      shell: cmd
+      run: |
+        call build_release.bat release
+    
+    - name: Upload Windows artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: vkgfx-windows-release
+        path: release/vkgfx-windows-x86_64-release.zip
+        retention-days: 30
+
+  publish-releases:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'release'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download Linux artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: vkgfx-linux-release
+        path: artifacts/
+    
+    - name: Download Windows artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: vkgfx-windows-release
+        path: artifacts/
+    
+    - name: Upload to GitHub Release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        RELEASE_TAG=${{ github.event.release.tag_name }}
+        gh release upload "$RELEASE_TAG" \
+          artifacts/vkgfx-linux-x86_64-release.zip \
+          artifacts/vkgfx-windows-x86_64-release.zip \
+          --clobber
