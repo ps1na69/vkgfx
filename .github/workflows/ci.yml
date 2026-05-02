@@ -102,7 +102,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v2.0.0
+        uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: latest
           cache: false
