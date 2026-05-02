@@ -82,13 +82,42 @@ The overlay auto-positions top-right and colour-codes pass timings (green < 0.5 
 
 ---
 
-## Building
+## Building from Source
 
 ```bash
 cmake -S . -B build -DVKGFX_ENABLE_PROFILING=ON
 cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure
 ```
+
+---
+
+## Using Pre-built Releases (Recommended for Beginners)
+
+Don't want to deal with CMake and dependencies? Download a pre-built release!
+
+### Steps:
+
+1. **Go to [Releases](https://github.com/ps1na69/vkgfx/releases)**
+2. **Download the ZIP for your OS:**
+   - `vkgfx-windows-x86_64-release.zip` (Windows)
+   - `vkgfx-linux-x86_64-release.zip` (Linux)
+3. **Extract to your project folder**
+4. **Link to your IDE** (see included README.md)
+
+### What's Included:
+
+- ✅ Pre-compiled static library (`lib/`)
+- ✅ All header files (`include/`)
+- ✅ Compiled shaders (`bin/shaders/`)
+- ✅ Example code (`examples/`)
+- ✅ Usage instructions
+
+### No CMake or Git Required!
+
+Just download, extract, and link to Visual Studio, CLion, or any C++ IDE.
+
+For detailed instructions, see **[RELEASE_GUIDE.md](RELEASE_GUIDE.md)**.
 
 ---
 
