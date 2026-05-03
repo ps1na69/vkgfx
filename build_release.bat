@@ -33,6 +33,12 @@ if exist "%RELEASE_DIR%" rmdir /s /q "%RELEASE_DIR%"
 mkdir "%BUILD_DIR%"
 mkdir "%RELEASE_DIR%"
 
+REM Resolve absolute path BEFORE changing directory.
+REM CMAKE_INSTALL_PREFIX must be absolute; a relative path is not
+REM reliably handled by CMake and causes lib/ and include/ to be
+REM installed to the wrong location or skipped entirely.
+set ABS_RELEASE_DIR=%CD%\%RELEASE_DIR%
+
 cd "%BUILD_DIR%"
 
 REM Configure with CMake
@@ -44,7 +50,7 @@ cmake .. ^
     -DVKGFX_BUILD_EXAMPLES=OFF ^
     -DVKGFX_BUILD_TESTS=OFF ^
     -DVKGFX_ENABLE_VALIDATION=OFF ^
-    -DCMAKE_INSTALL_PREFIX="../%RELEASE_DIR%"
+    -DCMAKE_INSTALL_PREFIX="%ABS_RELEASE_DIR%"
 if errorlevel 1 (
     echo CMake configuration failed!
     cd ..
@@ -61,13 +67,21 @@ if errorlevel 1 (
 )
 
 REM Install
-echo [3/3] Installing to release directory...
-cmake --install . --config "%BUILD_TYPE%"
+REM --prefix must be passed here explicitly: with the Visual Studio
+REM multi-config generator cmake --install ignores the prefix baked
+REM in at configure time unless it is overridden on the command line.
+echo [3/3] Installing to %ABS_RELEASE_DIR%...
+cmake --install . --config "%BUILD_TYPE%" --prefix "%ABS_RELEASE_DIR%"
 if errorlevel 1 (
     echo Install failed!
     cd ..
     exit /b 1
 )
+
+echo.
+echo --- Contents installed to release directory ---
+dir /b "%ABS_RELEASE_DIR%"
+echo -----------------------------------------------
 
 cd ..
 
@@ -104,19 +118,19 @@ echo # Add your executable
 echo add_executable^(my_app main.cpp^)
 echo.
 echo # Link vkgfx library
-echo target_link_libraries^(my_app PRIVATE^)
-echo     vkgfx::vkgfx^)
+echo target_link_libraries^(my_app PRIVATE
+echo     vkgfx::vkgfx
 echo     Vulkan::Vulkan^)
 echo.
 echo # Include directories
-echo target_include_directories^(my_app PRIVATE^)
+echo target_include_directories^(my_app PRIVATE
 echo     ${CMAKE_CURRENT_SOURCE_DIR}/../include^)
 echo.
 echo # Copy shaders to output directory
-echo add_custom_command^(TARGET my_app POST_BUILD^)
-echo     COMMAND ${CMAKE_COMMAND} -E copy_directory^)
-echo         "${CMAKE_CURRENT_SOURCE_DIR}/../bin/shaders"^)
-echo         "$^<TARGET_FILE_DIR:my_app^>/shaders"^)
+echo add_custom_command^(TARGET my_app POST_BUILD
+echo     COMMAND ${CMAKE_COMMAND} -E copy_directory
+echo         "${CMAKE_CURRENT_SOURCE_DIR}/../bin/shaders"
+echo         "$^<TARGET_FILE_DIR:my_app^>/shaders"
 echo ^)
 ) > "%RELEASE_DIR%\examples\CMakeLists.txt"
 
@@ -125,7 +139,7 @@ echo Creating README.md...
 (
 echo # vkgfx - Simple Vulkan Graphics Engine
 echo.
-echo Pre-built binary release for **%OS_NAME%** (**%ARCH%**, **%CONFIG**^)
+echo Pre-built binary release for **%OS_NAME%** (**%ARCH%**, **%CONFIG%**^)
 echo.
 echo ## Quick Start
 echo.
@@ -267,8 +281,8 @@ echo Issues: https://github.com/[your-username]/vkgfx/issues
 REM Create ZIP archive
 echo.
 echo Creating ZIP archive...
-if exist "%RELEASE_NAME%.zip" del "%RELEASE_NAME%.zip"
-powershell -Command "Compress-Archive -Path '%RELEASE_NAME%' -DestinationPath '%RELEASE_NAME%.zip' -Force"
+if exist "release\%RELEASE_NAME%.zip" del "release\%RELEASE_NAME%.zip"
+powershell -Command "Compress-Archive -Path 'release\%RELEASE_NAME%' -DestinationPath 'release\%RELEASE_NAME%.zip' -Force"
 
 echo.
 echo ============================================
@@ -282,4 +296,5 @@ echo   1. Extract the ZIP to your project
 echo   2. Follow instructions in README.md
 echo ============================================
 
+pause
 endlocal

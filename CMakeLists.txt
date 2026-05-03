@@ -157,7 +157,9 @@ if(VKGFX_ENABLE_PROFILING)
                 ${imgui_SOURCE_DIR}
                 ${imgui_SOURCE_DIR}/backends)
         target_link_libraries(imgui_vkgfx
-            PUBLIC Vulkan::Vulkan ${VKGFX_GLFW_TARGET})
+            PUBLIC
+                $<IF:$<TARGET_EXISTS:Vulkan::Vulkan>,Vulkan::Vulkan,vulkan_headers_auto>
+                ${VKGFX_GLFW_TARGET})
         # Do NOT define IMGUI_IMPL_VULKAN_NO_PROTOTYPES — vkgfx links against
         # vulkan-1 directly so all Vulkan symbols are already resolved.
         # That flag would require a manual ImGui_ImplVulkan_LoadFunctions() call.
@@ -229,7 +231,7 @@ endif()
 
 # nlohmann/json
 if(TARGET nlohmann_json::nlohmann_json)
-    target_link_libraries(vkgfx PRIVATE $<BUILD_INTERFACE:nlohmann_json::nlohmann_json>)
+    target_link_libraries(vkgfx PRIVATE nlohmann_json::nlohmann_json)
 elseif(json_SOURCE_DIR)
     target_include_directories(vkgfx PRIVATE $<BUILD_INTERFACE:${json_SOURCE_DIR}/include>)
 endif()
@@ -240,7 +242,7 @@ if(tinyobjloader_SOURCE_DIR)
 endif()
 
 # fastgltf — link to the imported target; it brings its own include dirs
-target_link_libraries(vkgfx PRIVATE $<BUILD_INTERFACE:fastgltf>)
+target_link_libraries(vkgfx PRIVATE fastgltf)
 
 if(Vulkan_FOUND)
     target_link_libraries(vkgfx PUBLIC Vulkan::Vulkan)
