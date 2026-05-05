@@ -65,7 +65,11 @@ if(NOT glm_FOUND)
         GIT_TAG        1.0.1
         GIT_SHALLOW    TRUE)
     set(GLM_ENABLE_CXX_20 ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(glm)
+    FetchContent_GetProperties(glm)
+    if(NOT glm_POPULATED)
+        FetchContent_Populate(glm)
+        add_subdirectory(${glm_SOURCE_DIR} ${glm_BINARY_DIR} EXCLUDE_FROM_ALL)
+    endif()
 endif()
 
 if(TARGET glm::glm)
@@ -91,7 +95,11 @@ FetchContent_Declare(vma
     GIT_SHALLOW    TRUE)
 set(VMA_BUILD_SAMPLES         OFF CACHE BOOL "" FORCE)
 set(VMA_BUILD_DOCUMENTATION   OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(vma)
+FetchContent_GetProperties(vma)
+if(NOT vma_POPULATED)
+    FetchContent_Populate(vma)
+    add_subdirectory(${vma_SOURCE_DIR} ${vma_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif()
 
 # ── stb ───────────────────────────────────────────────────────────────────────
 message(STATUS "vkgfx: fetching stb")
@@ -118,7 +126,11 @@ FetchContent_Declare(tinyobjloader
     GIT_TAG        v2.0.0rc13
     GIT_SHALLOW    TRUE)
 set(TINYOBJLOADER_BUILD_TEST_LOADER OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(tinyobjloader)
+FetchContent_GetProperties(tinyobjloader)
+if(NOT tinyobjloader_POPULATED)
+    FetchContent_Populate(tinyobjloader)
+    add_subdirectory(${tinyobjloader_SOURCE_DIR} ${tinyobjloader_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif()
 
 # ── fastgltf ──────────────────────────────────────────────────────────────────
 message(STATUS "vkgfx: fetching fastgltf")
@@ -129,7 +141,11 @@ FetchContent_Declare(fastgltf
 set(FASTGLTF_COMPILE_AS_CPP20 ON  CACHE BOOL "" FORCE)
 set(FASTGLTF_ENABLE_TESTS     OFF CACHE BOOL "" FORCE)
 set(FASTGLTF_ENABLE_EXAMPLES  OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(fastgltf)
+FetchContent_GetProperties(fastgltf)
+if(NOT fastgltf_POPULATED)
+    FetchContent_Populate(fastgltf)
+    add_subdirectory(${fastgltf_SOURCE_DIR} ${fastgltf_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif()
 
 # ── Dear ImGui (GPU profiler overlay) ─────────────────────────────────────────
 # ON by default so examples show the profiler out of the box.
@@ -229,9 +245,15 @@ if(stb_SOURCE_DIR)
     target_include_directories(vkgfx PRIVATE $<BUILD_INTERFACE:${stb_SOURCE_DIR}>)
 endif()
 
-# nlohmann/json
+# nlohmann/json — header-only library, include dirs only (never link_libraries).
+# Linking a FetchContent target that has no install rule causes:
+#   "install(EXPORT) includes target vkgfx which requires target nlohmann_json
+#    that is not in any export set."
 if(TARGET nlohmann_json::nlohmann_json)
-    target_link_libraries(vkgfx PRIVATE nlohmann_json::nlohmann_json)
+    get_target_property(_JSON_INC nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
+    if(_JSON_INC)
+        target_include_directories(vkgfx PRIVATE $<BUILD_INTERFACE:${_JSON_INC}>)
+    endif()
 elseif(json_SOURCE_DIR)
     target_include_directories(vkgfx PRIVATE $<BUILD_INTERFACE:${json_SOURCE_DIR}/include>)
 endif()
@@ -241,8 +263,11 @@ if(tinyobjloader_SOURCE_DIR)
     target_include_directories(vkgfx PRIVATE $<BUILD_INTERFACE:${tinyobjloader_SOURCE_DIR}>)
 endif()
 
-# fastgltf — link to the imported target; it brings its own include dirs
-target_link_libraries(vkgfx PRIVATE fastgltf)
+# fastgltf — compiled FetchContent target with no install rule.
+# BUILD_INTERFACE suppresses it from the install export set, preventing:
+#   "install(EXPORT) includes target vkgfx which requires target fastgltf
+#    that is not in any export set."
+target_link_libraries(vkgfx PRIVATE $<BUILD_INTERFACE:fastgltf>)
 
 if(Vulkan_FOUND)
     target_link_libraries(vkgfx PUBLIC Vulkan::Vulkan)

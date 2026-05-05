@@ -1,5 +1,5 @@
 @echo off
-REM build_release.bat — Build vkgfx release package for Windows
+REM build_release.bat - Build vkgfx release package for Windows
 REM Usage: build_release.bat [release|debug]
 
 setlocal enabledelayedexpansion
@@ -19,91 +19,157 @@ set ARCH=x86_64
 set RELEASE_NAME=vkgfx-%OS_NAME%-%ARCH%-%CONFIG%
 set RELEASE_DIR=release\%RELEASE_NAME%
 set BUILD_DIR=build_%PLATFORM%_%CONFIG%
+set LOG_FILE=build_%CONFIG%.log
 
 echo ============================================
-echo Building vkgfx release package
-echo Platform: %OS_NAME% (%ARCH%)
-echo Config:   %BUILD_TYPE%
-echo Output:   %RELEASE_DIR%
+echo  Building vkgfx release package
+echo  Platform : %OS_NAME% (%ARCH%)
+echo  Config   : %BUILD_TYPE%
+echo  Output   : %RELEASE_DIR%
+echo  Log      : %LOG_FILE%
 echo ============================================
+echo.
 
-REM Clean previous build
-if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
-if exist "%RELEASE_DIR%" rmdir /s /q "%RELEASE_DIR%"
+REM ── Sanity checks ────────────────────────────────────────────────────────────
+
+REM Check cmake is on PATH
+where cmake >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] cmake not found on PATH.
+    echo.
+    echo   Common fixes:
+    echo     1. Install CMake from https://cmake.org/ and tick "Add to PATH"
+    echo     2. Or add Visual Studio's cmake manually:
+    echo        C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin
+    echo.
+    goto :error
+)
+
+REM Check Visual Studio 2022 generator is available; fall back to 2019 silently
+cmake --help | findstr /C:"Visual Studio 17 2022" >nul 2>&1
+if errorlevel 1 (
+    echo [WARN] Visual Studio 17 2022 generator not found, trying Visual Studio 16 2019...
+    set VS_GENERATOR=Visual Studio 16 2019
+) else (
+    set VS_GENERATOR=Visual Studio 17 2022
+)
+
+REM ── Clean previous build ─────────────────────────────────────────────────────
+
+if exist "%BUILD_DIR%" (
+    echo Cleaning previous build directory...
+    rmdir /s /q "%BUILD_DIR%"
+)
+if exist "%RELEASE_DIR%" (
+    echo Cleaning previous release directory...
+    rmdir /s /q "%RELEASE_DIR%"
+)
 mkdir "%BUILD_DIR%"
 mkdir "%RELEASE_DIR%"
+if exist "%LOG_FILE%" del "%LOG_FILE%"
 
 REM Resolve absolute path BEFORE changing directory.
-REM CMAKE_INSTALL_PREFIX must be absolute; a relative path is not
-REM reliably handled by CMake and causes lib/ and include/ to be
-REM installed to the wrong location or skipped entirely.
+REM CMAKE_INSTALL_PREFIX must be absolute - with the Visual Studio multi-config
+REM generator a relative path resolves against the source dir, not the build dir.
 set ABS_RELEASE_DIR=%CD%\%RELEASE_DIR%
+set ABS_BUILD_DIR=%CD%\%BUILD_DIR%
+set ABS_LOG=%CD%\%LOG_FILE%
+
+echo Build log: %ABS_LOG%
+echo.
 
 cd "%BUILD_DIR%"
 
-REM Configure with CMake
-echo [1/3] Configuring with CMake...
+REM ── [1/3] Configure ──────────────────────────────────────────────────────────
+
+echo [1/3] Configuring with CMake (generator: %VS_GENERATOR%)...
 cmake .. ^
-    -G "Visual Studio 17 2022" ^
+    -G "%VS_GENERATOR%" ^
     -A x64 ^
     -DCMAKE_BUILD_TYPE="%BUILD_TYPE%" ^
     -DVKGFX_BUILD_EXAMPLES=OFF ^
     -DVKGFX_BUILD_TESTS=OFF ^
     -DVKGFX_ENABLE_VALIDATION=OFF ^
-    -DCMAKE_INSTALL_PREFIX="%ABS_RELEASE_DIR%"
-if errorlevel 1 (
-    echo CMake configuration failed!
-    cd ..
-    exit /b 1
-)
+    -DCMAKE_INSTALL_PREFIX="%ABS_RELEASE_DIR%" ^
+    >> "%ABS_LOG%" 2>&1
 
-REM Build
+if errorlevel 1 (
+    echo [ERROR] CMake configuration failed!
+    echo.
+    echo Last 30 lines of log:
+    powershell -Command "Get-Content '%ABS_LOG%' -Tail 30"
+    echo.
+    echo Full log: %ABS_LOG%
+    cd ..
+    goto :error
+)
+echo   Configure OK.
+
+REM ── [2/3] Build ──────────────────────────────────────────────────────────────
+
 echo [2/3] Building library...
-cmake --build . --config "%BUILD_TYPE%" --target vkgfx
-if errorlevel 1 (
-    echo Build failed!
-    cd ..
-    exit /b 1
-)
+cmake --build . --config "%BUILD_TYPE%" --target vkgfx -- /m >> "%ABS_LOG%" 2>&1
 
-REM Install
-REM --prefix must be passed here explicitly: with the Visual Studio
-REM multi-config generator cmake --install ignores the prefix baked
-REM in at configure time unless it is overridden on the command line.
+if errorlevel 1 (
+    echo [ERROR] Build failed!
+    echo.
+    echo Last 50 lines of log:
+    powershell -Command "Get-Content '%ABS_LOG%' -Tail 50"
+    echo.
+    echo Full log: %ABS_LOG%
+    cd ..
+    goto :error
+)
+echo   Build OK.
+
+REM ── [3/3] Install ────────────────────────────────────────────────────────────
+
+REM --prefix must be passed here explicitly: with the Visual Studio multi-config
+REM generator cmake --install ignores the prefix baked in at configure time
+REM unless it is overridden on the command line.
 echo [3/3] Installing to %ABS_RELEASE_DIR%...
-cmake --install . --config "%BUILD_TYPE%" --prefix "%ABS_RELEASE_DIR%"
-if errorlevel 1 (
-    echo Install failed!
-    cd ..
-    exit /b 1
-)
+cmake --install . --config "%BUILD_TYPE%" --prefix "%ABS_RELEASE_DIR%" >> "%ABS_LOG%" 2>&1
 
-echo.
-echo --- Contents installed to release directory ---
-dir /b "%ABS_RELEASE_DIR%"
-echo -----------------------------------------------
+if errorlevel 1 (
+    echo [ERROR] Install failed!
+    echo.
+    echo Last 30 lines of log:
+    powershell -Command "Get-Content '%ABS_LOG%' -Tail 30"
+    echo.
+    echo Full log: %ABS_LOG%
+    cd ..
+    goto :error
+)
+echo   Install OK.
 
 cd ..
 
-REM Create additional directories structure
-mkdir "%RELEASE_DIR%\bin\shaders"
-mkdir "%RELEASE_DIR%\examples"
-mkdir "%RELEASE_DIR%\docs"
+REM ── Post-install: fix up directory layout ───────────────────────────────────
 
-REM Copy compiled shaders
-if exist "%BUILD_DIR%\shaders\*.spv" (
-    copy "%BUILD_DIR%\shaders\*.spv" "%RELEASE_DIR%\bin\shaders\" >nul
+REM cmake installs shaders to share\vkgfx\shaders\ (GNUInstallDirs on Windows).
+REM Move them to bin\shaders\ which is what the README and users expect.
+mkdir "%RELEASE_DIR%\bin\shaders" 2>nul
+if exist "%RELEASE_DIR%\share\vkgfx\shaders" (
+    echo Relocating shaders from share\vkgfx\shaders to bin\shaders...
+    xcopy /e /y "%RELEASE_DIR%\share\vkgfx\shaders\*" "%RELEASE_DIR%\bin\shaders\" >nul
+    rmdir /s /q "%RELEASE_DIR%\share"
 )
 
-REM Copy example source files
-if exist "examples\*.cpp" (
-    copy "examples\*.cpp" "%RELEASE_DIR%\examples\" >nul
-)
-if exist "examples\CMakeLists.txt" (
-    copy "examples\CMakeLists.txt" "%RELEASE_DIR%\examples\" >nul
+REM Also copy directly from build dir in case install missed them
+if exist "%BUILD_DIR%\shaders" (
+    xcopy /e /y "%BUILD_DIR%\shaders\*.spv" "%RELEASE_DIR%\bin\shaders\" >nul 2>&1
 )
 
-REM Create simple example CMakeLists for users
+REM ── Copy example sources (repo folder is "example", singular) ────────────────
+
+mkdir "%RELEASE_DIR%\examples" 2>nul
+if exist "example\*.cpp" (
+    copy "example\*.cpp" "%RELEASE_DIR%\examples\" >nul
+    echo Copied example sources.
+)
+
+REM ── Generate user-facing example CMakeLists.txt ──────────────────────────────
+
 (
 echo cmake_minimum_required^(VERSION 3.16^)
 echo project^(my_vkgfx_app^)
@@ -111,190 +177,113 @@ echo.
 echo set^(CMAKE_CXX_STANDARD 20^)
 echo set^(CMAKE_CXX_STANDARD_REQUIRED ON^)
 echo.
-echo # Find Vulkan
+echo # Path to the vkgfx release folder
+echo set^(VKGFX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.."^)
+echo.
+echo # Import vkgfx as a pre-built static library
+echo add_library^(vkgfx STATIC IMPORTED^)
+echo set_target_properties^(vkgfx PROPERTIES
+echo     IMPORTED_LOCATION "${VKGFX_ROOT}/lib/vkgfx.lib"
+echo     INTERFACE_INCLUDE_DIRECTORIES "${VKGFX_ROOT}/include"^)
+echo.
+echo # Find Vulkan SDK
 echo find_package^(Vulkan REQUIRED^)
 echo.
-echo # Add your executable
 echo add_executable^(my_app main.cpp^)
+echo target_link_libraries^(my_app PRIVATE vkgfx Vulkan::Vulkan^)
 echo.
-echo # Link vkgfx library
-echo target_link_libraries^(my_app PRIVATE
-echo     vkgfx::vkgfx
-echo     Vulkan::Vulkan^)
-echo.
-echo # Include directories
-echo target_include_directories^(my_app PRIVATE
-echo     ${CMAKE_CURRENT_SOURCE_DIR}/../include^)
-echo.
-echo # Copy shaders to output directory
+echo # Copy compiled shaders next to the executable
 echo add_custom_command^(TARGET my_app POST_BUILD
 echo     COMMAND ${CMAKE_COMMAND} -E copy_directory
-echo         "${CMAKE_CURRENT_SOURCE_DIR}/../bin/shaders"
-echo         "$^<TARGET_FILE_DIR:my_app^>/shaders"
-echo ^)
+echo         "${VKGFX_ROOT}/bin/shaders"
+echo         "$^<TARGET_FILE_DIR:my_app^>/shaders"^)
 ) > "%RELEASE_DIR%\examples\CMakeLists.txt"
 
-REM Create README for users
-echo Creating README.md...
+REM ── Generate README.md ───────────────────────────────────────────────────────
+
 (
-echo # vkgfx - Simple Vulkan Graphics Engine
+echo # vkgfx — Simple Vulkan Graphics Engine
 echo.
-echo Pre-built binary release for **%OS_NAME%** (**%ARCH%**, **%CONFIG%**^)
+echo Pre-built binary release for **%OS_NAME%** / **%ARCH%** / **%CONFIG%**
 echo.
-echo ## Quick Start
+echo ## Prerequisites
 echo.
-echo ### Prerequisites
+echo - **Vulkan SDK** ^(https://vulkan.lunarg.com/^) — set `VULKAN_SDK` env var
+echo - **Visual Studio 2019+** with C++ workload
 echo.
-echo Before using vkgfx, ensure you have:
-echo.
-echo 1. **Vulkan SDK** installed
-echo    - Download from https://vulkan.lunarg.com/
-echo.
-echo 2. **C++20 compatible compiler**
-echo    - Visual Studio 2019+ or Clang 12+
-echo.
-echo ### Directory Structure
+echo ## Directory Structure
 echo.
 echo ```
 echo %RELEASE_NAME%\
-echo ├── include/          # Public header files
-echo │   └── vkgfx/
-echo │       ├── vkgfx.h   # Master include ^(include this one^)
-echo │   └── *.h       # Individual headers
-echo ├── lib/              # Compiled library files
-echo │   └── vkgfx.lib     # Windows static library
-echo ├── bin/              # Runtime binaries
-echo │   └── shaders/      # Compiled SPIR-V shaders ^(*.spv^)
-echo ├── examples/         # Example source code
-echo └── README.md         # This file
+echo ├── include\vkgfx\    ^(public headers^)
+echo ├── lib\vkgfx.lib     ^(static library^)
+echo ├── bin\shaders\      ^(compiled SPIR-V *.spv files^)
+echo ├── examples\         ^(sample source + CMakeLists.txt^)
+echo └── README.md
 echo ```
 echo.
-echo ### Using in Your Project
-echo.
-echo #### Option 1: CMake ^(Recommended^)
-echo.
-echo 1. Copy the entire release folder to your project
-echo 2. In your CMakeLists.txt:
+echo ## Quick CMake Integration
 echo.
 echo ```cmake
-echo cmake_minimum_required^(VERSION 3.16^)
-echo project^(my_app^)
+echo set^(VKGFX_ROOT "${CMAKE_SOURCE_DIR}/thirdparty/%RELEASE_NAME%"^)
 echo.
-echo set^(CMAKE_CXX_STANDARD 20^)
-echo.
-echo # Point to vkgfx location
-echo set^(VKGFX_ROOT "${CMAKE_SOURCE_DIR}/thirdparty/%RELEASE_NAME%^")
-echo.
-echo # Add vkgfx library
 echo add_library^(vkgfx STATIC IMPORTED^)
-echo set_target_properties^(vkgfx PROPERTIES^)
-echo     IMPORTED_LOCATION "${VKGFX_ROOT}/lib/vkgfx.lib"^)
+echo set_target_properties^(vkgfx PROPERTIES
+echo     IMPORTED_LOCATION "${VKGFX_ROOT}/lib/vkgfx.lib"
 echo     INTERFACE_INCLUDE_DIRECTORIES "${VKGFX_ROOT}/include"^)
-echo ^)
 echo.
-echo # Find Vulkan
 echo find_package^(Vulkan REQUIRED^)
-echo.
-echo # Your executable
 echo add_executable^(my_app src/main.cpp^)
 echo target_link_libraries^(my_app PRIVATE vkgfx Vulkan::Vulkan^)
 echo ```
 echo.
-echo #### Option 2: Visual Studio Configuration
+echo ## Important Notes
 echo.
-echo 1. Right-click project → Properties
-echo 2. C/C++ → General → Additional Include Directories:
-echo    - Add: `path\\to\\vkgfx\\include`
-echo 3. Linker → Input → Additional Dependencies:
-echo    - Add: `path\\to\\vkgfx\\lib\\vkgfx.lib`
-echo    - Add: `vulkan-1.lib`
-echo 4. Copy `bin\\shaders` folder to your executable directory
-echo.
-echo ### Minimal Example
-echo.
-echo ```cpp
-echo #include ^<vkgfx/vkgfx.h^>
-echo #include ^<iostream^>
-echo.
-echo int main^(^) {
-echo     // Create window and context
-echo     vkgfx::WindowConfig winCfg{};
-echo     winCfg.width = 800;
-echo     winCfg.height = 600;
-echo     winCfg.title = "My App";
-echo.
-echo     vkgfx::Window window^(winCfg^);
-echo.
-echo     vkgfx::ContextConfig ctxCfg{};
-echo     ctxCfg.appName = "MyApp";
-echo     ctxCfg.validation = true;  // Enable validation layers in debug
-echo.
-echo     vkgfx::Context ctx^(ctxCfg, window.surface^(^)^);
-echo.
-echo     std::cout ^<^< "vkgfx initialized successfully!" ^<^< std::endl;
-echo     return 0;
-echo }
-echo ```
-echo.
-echo ### Important Notes
-echo.
-echo 1. **Shaders**: The `bin\\shaders\\` folder must be copied to your executable's working directory
-echo 2. **Validation Layers**: This release build has validation layers **DISABLED** for better performance and smaller size. For development, build from source with `VKGFX_ENABLE_VALIDATION=ON`.
-echo 3. **GLFW**: vkgfx uses GLFW internally - it's statically linked in this release
-echo 4. **Other dependencies**: GLM, stb, tinyobjloader, fastgltf are all statically linked
-echo.
-echo ### Troubleshooting
-echo.
-echo **Error: Cannot find Vulkan**
-echo - Install Vulkan SDK from https://vulkan.lunarg.com/
-echo - Ensure `VULKAN_SDK` environment variable is set
-echo.
-echo **Error: Missing shaders**
-echo - Copy `bin\\shaders\\` folder to your executable directory
-echo - Or set working directory to include shaders path
-echo.
-echo **Error: Validation layer not found**
-echo - Install Vulkan SDK with validation layers
-echo - Set `ctxCfg.validation = false` to disable ^(not recommended for development^)
-echo.
-echo ### API Reference
-echo.
-echo For full API documentation, see headers in `include/vkgfx/`:
-echo.
-echo - `vkgfx.h` - Master include, includes all public APIs
-echo - `window.h` - Window creation and management
-echo - `context.h` - Vulkan context and device
-echo - `renderer.h` - Main rendering interface
-echo - `scene.h` - Scene graph and entities
-echo - `mesh.h` - 3D model loading
-echo - `texture.h` - Texture loading and management
-echo - `camera.h` - Camera utilities
-echo - `collision.h` - Collision detection
-echo - `config.h` - Configuration and settings
-echo.
-echo ### Support
-echo.
-echo GitHub: https://github.com/[your-username]/vkgfx
-echo Issues: https://github.com/[your-username]/vkgfx/issues
+echo - Copy `bin\shaders\` next to your executable before running
+echo - Validation layers are DISABLED in release; build from source for dev builds
+echo - All deps ^(GLFW, GLM, stb, tinyobjloader^) are statically linked
 ) > "%RELEASE_DIR%\README.md"
 
-REM Create ZIP archive
+REM ── Create ZIP ───────────────────────────────────────────────────────────────
+
 echo.
 echo Creating ZIP archive...
 if exist "release\%RELEASE_NAME%.zip" del "release\%RELEASE_NAME%.zip"
-powershell -Command "Compress-Archive -Path 'release\%RELEASE_NAME%' -DestinationPath 'release\%RELEASE_NAME%.zip' -Force"
+powershell -Command "Compress-Archive -Path '%RELEASE_DIR%' -DestinationPath 'release\%RELEASE_NAME%.zip' -Force"
+
+if errorlevel 1 (
+    echo [WARN] ZIP creation failed. The folder is still available at %RELEASE_DIR%
+) else (
+    echo   ZIP OK.
+)
+
+REM ── Summary ──────────────────────────────────────────────────────────────────
 
 echo.
 echo ============================================
-echo Release package created successfully!
+echo  Release package created successfully!
 echo.
-echo Archive: release\%RELEASE_NAME%.zip
-echo Folder:  %RELEASE_DIR%\
+echo  Archive : release\%RELEASE_NAME%.zip
+echo  Folder  : %RELEASE_DIR%\
+echo  Log     : %LOG_FILE%
 echo.
-echo To use:
-echo   1. Extract the ZIP to your project
-echo   2. Follow instructions in README.md
+echo  Release contents:
+dir /b "%RELEASE_DIR%"
 echo ============================================
-
+echo.
 pause
 endlocal
+exit /b 0
+
+REM ── Error handler ────────────────────────────────────────────────────────────
+
+:error
+echo.
+echo ============================================
+echo  BUILD FAILED
+echo  See full log: %LOG_FILE%
+echo ============================================
+echo.
+pause
+endlocal
+exit /b 1
