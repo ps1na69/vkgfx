@@ -64,7 +64,7 @@ int main() {
     }
 
     // Free GPU resources before shutdown
-    vkDeviceWaitIdle(renderer.context().device());
+    //vkDeviceWaitIdle(renderer.context().device());
     cube->destroy(renderer.context());
     renderer.shutdown();
     return 0;
