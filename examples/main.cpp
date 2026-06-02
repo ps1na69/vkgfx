@@ -54,7 +54,6 @@ int main(int argc, char** argv) {
     cfg.sun.intensity      = 4.0f;
     cfg.sun.color[0] = cfg.sun.color[1] = cfg.sun.color[2] = 1.f;
     cfg.gbufferDebug       = GBufferDebugView::None;
-    cfg.msaa               = MSAASamples::x8;
     cfg.profiling.enabled     = true;  // GPU timestamp overlay (top-right corner)
     cfg.profiling.showOverlay = true;
 

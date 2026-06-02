@@ -14,15 +14,13 @@ layout(push_constant) uniform Push {
 } push;
 
 layout(set = 0, binding = 0) uniform SceneUBO {
-    mat4  view;
-    mat4  proj;
-    mat4  viewProj;
-    mat4  invViewProj;
-    mat4  lightViewProj;
-    vec4  cameraPos;
-    vec2  viewport;
-    float time;
-    float _pad0;
+    mat4 view;
+    mat4 proj;
+    mat4 viewProj;
+    mat4 invViewProj;
+    mat4 lightViewProj;
+    vec4 cameraPos;
+    vec4 viewport;   // xy = (width, height), zw unused
 } scene;
 
 layout(location = 0) out vec3 outWorldPos;

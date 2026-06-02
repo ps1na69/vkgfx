@@ -9,9 +9,6 @@
 
 namespace vkgfx {
 
-/// MSAA sample count
-enum class MSAASamples : uint8_t { x1 = 1, x2 = 2, x4 = 4, x8 = 8 };
-
 /// G-buffer channel to visualise (None = full lighting)
 enum class GBufferDebugView : uint8_t {
     None      = 0,
@@ -40,14 +37,6 @@ struct SunConfig {
     float   intensity   = 5.0f;
 };
 
-/// SSAO settings
-struct SSAOConfig {
-    bool     enabled    = false;
-    uint32_t kernelSize = 32;
-    float    radius     = 0.5f;
-    float    bias       = 0.025f;
-};
-
 /// GPU profiling overlay settings.
 /// Requires the engine to be built with -DVKGFX_ENABLE_PROFILING=ON.
 /// When that flag is absent, all profiling code compiles to no-ops.
@@ -59,7 +48,6 @@ struct ProfilingConfig {
 /// Top-level renderer configuration
 struct RendererConfig {
     // Window / device
-    MSAASamples msaa        = MSAASamples::x4;
     bool        vsync       = true;
 
     // Shader / asset directories (resolved relative to exe if relative)
@@ -69,7 +57,6 @@ struct RendererConfig {
     // Passes
     IBLConfig       ibl;
     SunConfig       sun;
-    SSAOConfig      ssao;
     ProfilingConfig profiling;
 
     // Debug

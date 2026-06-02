@@ -70,8 +70,6 @@ int main() {
     cfg.sun.direction[0] = -0.4f;
     cfg.sun.direction[1] = -1.0f;
     cfg.sun.direction[2] = -0.3f;
-	cfg.msaa = MSAASamples::x8;
-
 
     Renderer   renderer(window, cfg);
     Context&   ctx = renderer.context();

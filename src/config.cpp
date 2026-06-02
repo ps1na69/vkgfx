@@ -43,8 +43,6 @@ RendererConfig RendererConfig::fromFile(const std::string& path) {
     if (j.contains("vsync"))      cfg.vsync     = j["vsync"];
     if (j.contains("shaderDir"))  cfg.shaderDir = j["shaderDir"];
     if (j.contains("assetDir"))   cfg.assetDir  = j["assetDir"];
-    if (j.contains("msaa"))       cfg.msaa      = static_cast<MSAASamples>(j["msaa"].get<uint8_t>());
-
     // IBL
     if (j.contains("ibl")) {
         const auto& ib = j["ibl"];
@@ -64,15 +62,6 @@ RendererConfig RendererConfig::fromFile(const std::string& path) {
         readVec3(s, "color",     cfg.sun.color);
     }
 
-    // SSAO
-    if (j.contains("ssao")) {
-        const auto& ss = j["ssao"];
-        if (ss.contains("enabled"))    cfg.ssao.enabled    = ss["enabled"];
-        if (ss.contains("kernelSize")) cfg.ssao.kernelSize = ss["kernelSize"];
-        if (ss.contains("radius"))     cfg.ssao.radius     = ss["radius"];
-        if (ss.contains("bias"))       cfg.ssao.bias       = ss["bias"];
-    }
-
     // Debug
     if (j.contains("gbufferDebug"))
         cfg.gbufferDebug = static_cast<GBufferDebugView>(j["gbufferDebug"].get<uint8_t>());
@@ -88,7 +77,6 @@ void RendererConfig::save(const std::string& path) const {
     j["vsync"]     = vsync;
     j["shaderDir"] = shaderDir;
     j["assetDir"]  = assetDir;
-    j["msaa"]      = static_cast<uint8_t>(msaa);
 
     j["ibl"] = {
         {"enabled",        ibl.enabled},
@@ -103,13 +91,6 @@ void RendererConfig::save(const std::string& path) const {
         {"direction", {sun.direction[0], sun.direction[1], sun.direction[2]}},
         {"color",     {sun.color[0],     sun.color[1],     sun.color[2]}},
         {"intensity", sun.intensity}
-    };
-
-    j["ssao"] = {
-        {"enabled",    ssao.enabled},
-        {"kernelSize", ssao.kernelSize},
-        {"radius",     ssao.radius},
-        {"bias",       ssao.bias}
     };
 
     j["gbufferDebug"] = static_cast<uint8_t>(gbufferDebug);
