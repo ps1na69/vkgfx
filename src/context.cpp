@@ -229,6 +229,14 @@ void Context::createLogicalDevice(const ContextConfig& cfg) {
     features13.dynamicRendering  = VK_TRUE;  // future render-pass-free passes
     features13.maintenance4      = VK_TRUE;
 
+    // Enable hostQueryReset so vkResetQueryPool() on the host is allowed.
+    VkPhysicalDeviceHostQueryResetFeatures hostQueryReset{};
+    hostQueryReset.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES;
+    hostQueryReset.hostQueryReset = VK_TRUE;
+
+    // Chain features: hostQueryReset -> features13 -> features2
+    features13.pNext = &hostQueryReset;
+
     VkPhysicalDeviceFeatures2 features2{};
     features2.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     features2.features = features;

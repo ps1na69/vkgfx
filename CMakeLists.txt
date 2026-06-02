@@ -209,7 +209,7 @@ if(VKGFX_ENABLE_PROFILING)
         target_link_libraries(imgui_vkgfx
             PUBLIC volk_headers ${VKGFX_GLFW_TARGET})
         target_compile_definitions(imgui_vkgfx
-            PUBLIC VK_NO_PROTOTYPES)
+            PUBLIC VK_NO_PROTOTYPES IMGUI_IMPL_VULKAN_USE_VOLK)
         target_include_directories(imgui_vkgfx
             PUBLIC
                 ${imgui_SOURCE_DIR}

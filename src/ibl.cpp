@@ -139,22 +139,25 @@ bool IBLSystem::loadEquirectangular(const std::string& path) {
         return false;
     }
 
-    VkDeviceSize size = static_cast<VkDeviceSize>(w * h * 4 * sizeof(float));
+    VkDeviceSize totalSize = static_cast<VkDeviceSize>(w) * static_cast<VkDeviceSize>(h) * 4 * sizeof(float);
 
     m_equirect = m_ctx.allocateImage(
         {static_cast<uint32_t>(w), static_cast<uint32_t>(h)},
         VK_FORMAT_R32G32B32A32_SFLOAT,
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
-    AllocatedBuffer staging = m_ctx.allocateBuffer(size,
+    // Upload in chunks to avoid allocating a single huge staging buffer (some GPUs/drivers
+    // have limited host-visible heap sizes). Use a modest 16 MiB staging buffer and upload
+    // multiple rows per iteration.
+    const VkDeviceSize kMaxStaging = 16ull * 1024ull * 1024ull; // 16 MiB
+    size_t rowBytes = static_cast<size_t>(w) * 4 * sizeof(float);
+    size_t rowsPerChunk = std::max<size_t>(1, static_cast<size_t>(kMaxStaging) / rowBytes);
+    VkDeviceSize stagingSize = static_cast<VkDeviceSize>(rowsPerChunk) * rowBytes;
+
+    AllocatedBuffer staging = m_ctx.allocateBuffer(stagingSize,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
 
     void* mapped = nullptr;
-    vmaMapMemory(m_ctx.vma(), static_cast<VmaAllocation>(staging.allocation), &mapped);
-    std::memcpy(mapped, pixels, static_cast<size_t>(size));
-    vmaUnmapMemory(m_ctx.vma(), static_cast<VmaAllocation>(staging.allocation));
-    stbi_image_free(pixels);
-
     VkCommandBuffer cmd = m_ctx.beginOneShot();
 
     transitionImage(cmd, m_equirect.image,
@@ -162,11 +165,24 @@ bool IBLSystem::loadEquirectangular(const std::string& path) {
         0, VK_ACCESS_TRANSFER_WRITE_BIT,
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 1, 1);
 
-    VkBufferImageCopy region{};
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent      = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
-    vkCmdCopyBufferToImage(cmd, staging.buffer, m_equirect.image,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    vmaMapMemory(m_ctx.vma(), static_cast<VmaAllocation>(staging.allocation), &mapped);
+    for (int y = 0; y < h; y += static_cast<int>(rowsPerChunk)) {
+        uint32_t curRows = static_cast<uint32_t>(std::min<size_t>(rowsPerChunk, static_cast<size_t>(h - y)));
+        size_t copyBytes = static_cast<size_t>(curRows) * rowBytes;
+        std::memcpy(mapped, pixels + static_cast<size_t>(y) * static_cast<size_t>(w) * 4u, copyBytes);
+
+        VkBufferImageCopy region{};
+        region.bufferOffset = 0;
+        region.bufferRowLength = 0; // tightly packed
+        region.bufferImageHeight = 0;
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageOffset = {0, static_cast<int32_t>(y), 0};
+        region.imageExtent = {static_cast<uint32_t>(w), curRows, 1};
+        vkCmdCopyBufferToImage(cmd, staging.buffer, m_equirect.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    }
+    vmaUnmapMemory(m_ctx.vma(), static_cast<VmaAllocation>(staging.allocation));
+    stbi_image_free(pixels);
 
     transitionImage(cmd, m_equirect.image,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,

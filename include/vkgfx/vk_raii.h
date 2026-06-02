@@ -6,6 +6,7 @@
 //   - Destroys on scope exit via the provided deleter
 //   - Is move-only (no copy)
 
+#include <volk.h>
 #include <vulkan/vulkan.h>
 #include <functional>
 #include <utility>
