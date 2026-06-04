@@ -29,6 +29,7 @@ vec2 sampleEquirect(vec3 dir) {
     vec2 uv = vec2(atan(dir.z, dir.x), asin(dir.y));
     uv *= INV_ATAN;
     uv += 0.5;
+    uv.y = 1.0 - uv.y;  // HDR V=0 is north pole (+Y); asin gives the opposite convention
     return uv;
 }
 

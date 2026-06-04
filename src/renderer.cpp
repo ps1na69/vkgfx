@@ -158,7 +158,11 @@ namespace vkgfx {
                                   "lighting.vert.spv","lighting.frag.spv",
                                   "tonemap.vert.spv","tonemap.frag.spv",
                                   "shadow.vert.spv",
-                                  "point_shadow.vert.spv","point_shadow.frag.spv" }) {
+                                  "point_shadow.vert.spv","point_shadow.frag.spv",
+                                  "equirect_to_cube.comp.spv",
+                                  "irradiance.comp.spv",
+                                  "prefilter.comp.spv",
+                                  "brdf_lut.comp.spv" }) {
             std::string p = m_cfg.shaderDir + "/" + name;
             if (!fs::exists(p))
                 throw std::runtime_error("[vkgfx] Required shader missing: " + p);
